@@ -26,6 +26,7 @@ class AudioGenerator:
     def __init__(self):
         self.audio_in_queue = asyncio.Queue()
         self.ws = None
+        self.ws_semaphore = asyncio.Semaphore(1)
         
         # Audio configuration
         self.FORMAT = pyaudio.paInt16
@@ -49,67 +50,69 @@ class AudioGenerator:
         self.complete_audio = bytearray()
 
     async def startup(self, voice):
-        setup_msg = {
-            "setup": {
-                "model": f"models/{self.model}",
-                "generation_config": {
-                    "speech_config": {
-                        "voice_config": {
-                            "prebuilt_voice_config": {
-                                "voice_name": voice
+        async with self.ws_semaphore:
+            setup_msg = {
+                "setup": {
+                    "model": f"models/{self.model}",
+                    "generation_config": {
+                        "speech_config": {
+                            "voice_config": {
+                                "prebuilt_voice_config": {
+                                    "voice_name": voice
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        await self.ws.send(json.dumps(setup_msg))
-        response = await self.ws.recv()
+            await self.ws.send(json.dumps(setup_msg))
+            response = await self.ws.recv()
 
     async def send_text(self, text, voice):
-        msg = {
-            "client_content": {
-                "turn_complete": True,
-                "turns": [
-                    {"role": "user", "parts": [{"text": text}]}
-                ]
+        async with self.ws_semaphore:
+            msg = {
+                "client_content": {
+                    "turn_complete": True,
+                    "turns": [
+                        {"role": "user", "parts": [{"text": text}]}
+                    ]
+                }
             }
-        }
-
-        await self.ws.send(json.dumps(msg))
+            await self.ws.send(json.dumps(msg))
 
     async def receive_audio(self, output_file):
-        self.complete_audio.clear()
-        await asyncio.sleep(0.1)
-        
-        try:
-            async for raw_response in self.ws:
-                response = json.loads(raw_response)
-                
-                # Process audio data
-                try:
-                    parts = response["serverContent"]["modelTurn"]["parts"]
-                    for part in parts:
-                        if "inlineData" in part:
-                            b64data = part["inlineData"]["data"]
-                            pcm_data = base64.b64decode(b64data)
-                            self.complete_audio.extend(pcm_data)
-                            self.audio_in_queue.put_nowait(pcm_data)
-                except KeyError:
-                    pass
+        async with self.ws_semaphore:
+            self.complete_audio.clear()
+            await asyncio.sleep(0.1)
+            
+            try:
+                async for raw_response in self.ws:
+                    response = json.loads(raw_response)
+                    
+                    # Process audio data
+                    try:
+                        parts = response["serverContent"]["modelTurn"]["parts"]
+                        for part in parts:
+                            if "inlineData" in part:
+                                b64data = part["inlineData"]["data"]
+                                pcm_data = base64.b64decode(b64data)
+                                self.complete_audio.extend(pcm_data)
+                                self.audio_in_queue.put_nowait(pcm_data)
+                    except KeyError:
+                        pass
 
-                # Check for completion
-                try:
-                    if response["serverContent"].get("turnComplete", False):
-                        self.save_wav_file(output_file)
-                        while not self.audio_in_queue.empty():
-                            self.audio_in_queue.get_nowait()
-                        break
-                except KeyError:
-                    pass
-        except websockets.exceptions.ConnectionClosedError as e:
-            print(f"Connection closed: {e}")
-            raise
+                    # Check for completion
+                    try:
+                        if response["serverContent"].get("turnComplete", False):
+                            self.save_wav_file(output_file)
+                            while not self.audio_in_queue.empty():
+                                self.audio_in_queue.get_nowait()
+                            break
+                    except KeyError:
+                        pass
+            except websockets.exceptions.ConnectionClosedError as e:
+                print(f"Connection closed: {e}")
+                raise
 
     def save_wav_file(self, filename):
         with wave.open(filename, 'wb') as wav_file:
@@ -125,22 +128,14 @@ class AudioGenerator:
             try:
                 async with await connect(self.uri, **self.ws_options) as ws:
                     self.ws = ws
-                    await self.startup(voices[0])  # Initialize with the first voice
-                    async with asyncio.TaskGroup() as tg:
-                        # Start receiving audio
-                        receive_task = tg.create_task(self.receive_audio(output_files[0]))
-                        # Send the first dialogue
-                        await self.send_text(dialogues[0], voices[0])
-                        await receive_task
-
-                        # Process subsequent dialogues
-                        for i in range(1, len(dialogues)):
-                            output_file = output_files[i]
-                            voice = voices[i]
-                            receive_task = tg.create_task(self.receive_audio(output_file))
-                            await self.send_text(dialogues[i], voice)
-                            await receive_task
+                    await self.startup(voices[0])
+                    
+                    # Process dialogues sequentially
+                    for i in range(len(dialogues)):
+                        await self.send_text(dialogues[i], voices[i])
+                        await self.receive_audio(output_files[i])
                     return
+                    
             except websockets.exceptions.ConnectionClosedError as e:
                 last_exception = e
                 if attempt < max_retries - 1:
@@ -172,17 +167,15 @@ def combine_audio_files(file_list, output_file):
     for file in file_list:
         audio = AudioSegment.from_wav(file)
         combined += audio
-    
     combined.export(output_file, format="wav")
 
 def read_file_content(file_path):
-        with open(file_path, 'r', encoding='utf-8') as file:
-            return file.read()
+    with open(file_path, 'r', encoding='utf-8') as file:
+        return file.read()
 
 async def setup_environment():
     if not os.getenv('GOOGLE_API_KEY'):
         raise EnvironmentError("GOOGLE_API_KEY not found in environment variables")
-    
     script_dir = os.path.dirname(os.path.abspath(__file__))
     return script_dir
 
@@ -225,18 +218,16 @@ async def main():
     with tempfile.TemporaryDirectory(dir=script_dir) as temp_dir:
         system_instructions, full_script, speaker_a_lines, speaker_b_lines = read_and_parse_inputs()
 
-        dialogues_a, voices_a, output_files_a = prepare_speaker_dialogues(system_instructions, full_script, speaker_a_lines, VOICE_A, temp_dir)
-        dialogues_b, voices_b, output_files_b = prepare_speaker_dialogues(system_instructions, full_script, speaker_b_lines, VOICE_B, temp_dir)
+        dialogues_a, voices_a, output_files_a = prepare_speaker_dialogues(
+            system_instructions, full_script, speaker_a_lines, VOICE_A, temp_dir)
+        dialogues_b, voices_b, output_files_b = prepare_speaker_dialogues(
+            system_instructions, full_script, speaker_b_lines, VOICE_B, temp_dir)
 
         generator = AudioGenerator()
-
-        await asyncio.gather(
-            process_speaker(generator, dialogues_a, output_files_a, voices_a),
-            process_speaker(generator, dialogues_b, output_files_b, voices_b)
-        )
+        await process_speaker(generator, dialogues_a, output_files_a, voices_a)
+        await process_speaker(generator, dialogues_b, output_files_b, voices_b)
 
         all_output_files = interleave_output_files(output_files_a[1:], output_files_b[1:])
-
         final_output = "final_podcast.wav"
         combine_audio_files(all_output_files, final_output)
         print(f"Final podcast audio created: {final_output}")
