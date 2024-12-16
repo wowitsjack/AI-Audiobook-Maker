@@ -30,7 +30,7 @@ class AudioGenerator:
         
         # Audio configuration
         self.FORMAT = pyaudio.paInt16
-        self.CHANNELS = 1
+        self.CHANNELS = 2
         self.SAMPLE_RATE = 24000
         self.CHUNK_SIZE = 512
         
@@ -119,7 +119,13 @@ class AudioGenerator:
             wav_file.setnchannels(self.CHANNELS)
             wav_file.setsampwidth(2)
             wav_file.setframerate(self.SAMPLE_RATE)
-            wav_file.writeframes(self.complete_audio)
+            # Convert mono to stereo by duplicating the audio data
+            stereo_data = bytearray()
+            for i in range(0, len(self.complete_audio), 2):
+                sample = self.complete_audio[i:i+2]
+                stereo_data.extend(sample)  # Left channel
+                stereo_data.extend(sample)  # Right channel
+            wav_file.writeframes(stereo_data)
         print(f"Audio saved to {filename}")
 
     async def run(self, dialogues, output_files, voices, max_retries=3):
@@ -166,6 +172,9 @@ def combine_audio_files(file_list, output_file):
     combined = AudioSegment.empty()
     for file in file_list:
         audio = AudioSegment.from_wav(file)
+        # Ensure stereo
+        if audio.channels == 1:
+            audio = audio.set_channels(2)
         combined += audio
     combined.export(output_file, format="wav")
 
