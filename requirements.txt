@@ -1,0 +1,6 @@
+pyaudio==0.2.11
+websockets==12.0
+python-dotenv==1.0.0
+pydub==0.25.1
+asyncio>=3.4.3
+base64io>=1.0.3
