@@ -2,6 +2,8 @@
 
 AI-Powered Podcast Generator: A Python-based tool that converts text scripts into realistic audio podcasts using Google's Generative AI API. This project leverages advanced text-to-speech technology to create dynamic, multi-speaker conversations with customizable voices.
 
+[![Create Unlimited Podcast Audio with Python and Google’s AI: A Step-by-Step Guide](https://img.youtube.com/vi/cu-56pBQSEM/maxresdefault.jpg)](https://www.youtube.com/watch?v=cu-56pBQSEM)
+
 Features:
 
 - Text-to-speech conversion using Google's Generative AI
