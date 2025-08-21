@@ -10,6 +10,7 @@ from PIL import Image
 import subprocess
 import sys
 import json
+import queue
 
 # Import our audiobook generation logic
 from app import generate_chapter_audio, combine_chapters, read_file_content, load_config
@@ -70,6 +71,10 @@ class AudiobookGeneratorGUI:
         self.output_format = tk.StringVar(value="WAV")
         self.mp3_bitrate = tk.StringVar(value="192")
         self.m4b_chapters = tk.BooleanVar(value=True)
+        
+        # Terminal variables
+        self.terminal_visible = False
+        self.terminal_queue = queue.Queue()
         
         # Load saved prompts and settings
         self.load_saved_settings()
@@ -530,10 +535,11 @@ Created with ❤️ for audiobook enthusiasts""")
         bottom_frame.grid_columnconfigure(0, weight=1)
         bottom_frame.grid_columnconfigure(1, weight=1)
         bottom_frame.grid_columnconfigure(2, weight=1)
+        bottom_frame.grid_columnconfigure(3, weight=1)
         
         open_output_btn = ctk.CTkButton(
-            bottom_frame, 
-            text="📂 Open Output Folder", 
+            bottom_frame,
+            text="📂 Open Output Folder",
             command=self.open_output_folder,
             height=35,
             font=ctk.CTkFont(size=12)
@@ -541,22 +547,83 @@ Created with ❤️ for audiobook enthusiasts""")
         open_output_btn.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         
         play_btn = ctk.CTkButton(
-            bottom_frame, 
-            text="▶️ Play Audiobook", 
+            bottom_frame,
+            text="▶️ Play Audiobook",
             command=self.play_audiobook,
             height=35,
             font=ctk.CTkFont(size=12)
         )
         play_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         
+        terminal_btn = ctk.CTkButton(
+            bottom_frame,
+            text="💻 Terminal",
+            command=self.toggle_terminal,
+            height=35,
+            font=ctk.CTkFont(size=12)
+        )
+        terminal_btn.grid(row=0, column=2, padx=10, pady=10, sticky="ew")
+        
         about_btn = ctk.CTkButton(
-            bottom_frame, 
-            text="ℹ️ About", 
+            bottom_frame,
+            text="ℹ️ About",
             command=self.show_about,
             height=35,
             font=ctk.CTkFont(size=12)
         )
-        about_btn.grid(row=0, column=2, padx=10, pady=10, sticky="ew")
+        about_btn.grid(row=0, column=3, padx=10, pady=10, sticky="ew")
+        
+        # Terminal frame (initially hidden)
+        self.terminal_frame = ctk.CTkFrame(self.root)
+        self.terminal_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=15, pady=(0, 15))
+        self.terminal_frame.grid_columnconfigure(0, weight=1)
+        self.terminal_frame.grid_rowconfigure(1, weight=1)
+        self.terminal_frame.grid_remove()  # Hide by default
+        
+        # Terminal header
+        terminal_header = ctk.CTkFrame(self.terminal_frame, fg_color="transparent")
+        terminal_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        terminal_header.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(terminal_header, text="💻 Terminal Output", font=ctk.CTkFont(size=14, weight="bold")).grid(
+            row=0, column=0, sticky="w"
+        )
+        
+        clear_btn = ctk.CTkButton(
+            terminal_header,
+            text="🗑️ Clear",
+            command=self.clear_terminal,
+            width=60,
+            height=25,
+            font=ctk.CTkFont(size=10)
+        )
+        clear_btn.grid(row=0, column=1, padx=(0, 10))
+        
+        # Terminal text area
+        self.terminal_text = ctk.CTkTextbox(
+            self.terminal_frame,
+            height=150,
+            font=ctk.CTkFont(size=10, family="Consolas")
+        )
+        self.terminal_text.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        
+        # Redirect print statements to terminal
+        import sys
+        from io import StringIO
+        
+        class TerminalRedirect:
+            def __init__(self, gui_instance):
+                self.gui = gui_instance
+                
+            def write(self, text):
+                self.gui.terminal_queue.put(text)
+                self.gui.process_terminal_queue()
+                
+            def flush(self):
+                pass
+                
+        sys.stdout = TerminalRedirect(self)
+        sys.stderr = TerminalRedirect(self)
         
         # Initialize
         self.refresh_chapters()
@@ -1630,7 +1697,33 @@ Perfect for:
 Created with ❤️ for audiobook enthusiasts and content creators"""
 
         messagebox.showinfo("About", about_text)
-        
+    
+    def toggle_terminal(self):
+        """Toggle the terminal visibility"""
+        if self.terminal_visible:
+            self.terminal_frame.grid_remove()
+            self.terminal_visible = False
+        else:
+            self.terminal_frame.grid()
+            self.terminal_visible = True
+            # Scroll to end when showing
+            self.terminal_text.see("end")
+    
+    def clear_terminal(self):
+        """Clear the terminal text"""
+        self.terminal_text.delete("1.0", "end")
+    
+    def process_terminal_queue(self):
+        """Process messages in the terminal queue"""
+        try:
+            while True:
+                message = self.terminal_queue.get_nowait()
+                if message:
+                    self.terminal_text.insert("end", message)
+                    self.terminal_text.see("end")
+        except queue.Empty:
+            pass
+    
     def run(self):
         """Start the GUI application"""
         # Set up protocol to save settings on close
