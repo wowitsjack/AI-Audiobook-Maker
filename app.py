@@ -1,247 +1,149 @@
-import tempfile
-import asyncio
-import base64
-import json
 import os
 import wave
-from websockets.asyncio.client import connect
-import websockets
-import pyaudio
+import glob
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
-import sys
 from pydub import AudioSegment
 
 load_dotenv()
 
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-VOICE_A = os.getenv('VOICE_A', 'Puck')
-VOICE_B = os.getenv('VOICE_B', 'Kore')
+NARRATOR_VOICE = os.getenv('NARRATOR_VOICE', 'Charon')
 
-if sys.version_info < (3, 11):
-    import taskgroup, exceptiongroup
-    asyncio.TaskGroup = taskgroup.TaskGroup
-    asyncio.ExceptionGroup = exceptiongroup.ExceptionGroup
+if not GOOGLE_API_KEY:
+    raise EnvironmentError("GOOGLE_API_KEY not found in environment variables")
 
-class AudioGenerator:
-    def __init__(self):
-        self.audio_in_queue = asyncio.Queue()
-        self.ws = None
-        self.ws_semaphore = asyncio.Semaphore(1)
-        
-        # Audio configuration
-        self.FORMAT = pyaudio.paInt16
-        self.CHANNELS = 2
-        self.SAMPLE_RATE = 24000
-        self.CHUNK_SIZE = 512
-        
-        # WebSocket configuration
-        self.ws_options = {
-            'ping_interval': 20,
-            'ping_timeout': 10,
-            'close_timeout': 5
-        }
-        
-        # API configuration
-        self.host = 'generativelanguage.googleapis.com'
-        self.model = "gemini-2.0-flash-exp"
-        self.uri = f"wss://{self.host}/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={GOOGLE_API_KEY}"
-        
-        # Store complete audio data
-        self.complete_audio = bytearray()
-
-    async def startup(self, voice):
-        async with self.ws_semaphore:
-            setup_msg = {
-                "setup": {
-                    "model": f"models/{self.model}",
-                    "generation_config": {
-                        "speech_config": {
-                            "voice_config": {
-                                "prebuilt_voice_config": {
-                                    "voice_name": voice
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            await self.ws.send(json.dumps(setup_msg))
-            response = await self.ws.recv()
-
-    async def send_text(self, text, voice):
-        async with self.ws_semaphore:
-            msg = {
-                "client_content": {
-                    "turn_complete": True,
-                    "turns": [
-                        {"role": "user", "parts": [{"text": text}]}
-                    ]
-                }
-            }
-            await self.ws.send(json.dumps(msg))
-
-    async def receive_audio(self, output_file):
-        async with self.ws_semaphore:
-            self.complete_audio.clear()
-            await asyncio.sleep(0.1)
-            
-            try:
-                async for raw_response in self.ws:
-                    response = json.loads(raw_response)
-                    
-                    # Process audio data
-                    try:
-                        parts = response["serverContent"]["modelTurn"]["parts"]
-                        for part in parts:
-                            if "inlineData" in part:
-                                b64data = part["inlineData"]["data"]
-                                pcm_data = base64.b64decode(b64data)
-                                self.complete_audio.extend(pcm_data)
-                                self.audio_in_queue.put_nowait(pcm_data)
-                    except KeyError:
-                        pass
-
-                    # Check for completion
-                    try:
-                        if response["serverContent"].get("turnComplete", False):
-                            self.save_wav_file(output_file)
-                            while not self.audio_in_queue.empty():
-                                self.audio_in_queue.get_nowait()
-                            break
-                    except KeyError:
-                        pass
-            except websockets.exceptions.ConnectionClosedError as e:
-                print(f"Connection closed: {e}")
-                raise
-
-    def save_wav_file(self, filename):
-        with wave.open(filename, 'wb') as wav_file:
-            wav_file.setnchannels(self.CHANNELS)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(self.SAMPLE_RATE)
-            # Convert mono to stereo by duplicating the audio data
-            stereo_data = bytearray()
-            for i in range(0, len(self.complete_audio), 2):
-                sample = self.complete_audio[i:i+2]
-                stereo_data.extend(sample)  # Left channel
-                stereo_data.extend(sample)  # Right channel
-            wav_file.writeframes(stereo_data)
-        print(f"Audio saved to {filename}")
-
-    async def run(self, dialogues, output_files, voices, max_retries=3):
-        last_exception = None
-        for attempt in range(max_retries):
-            try:
-                async with await connect(self.uri, **self.ws_options) as ws:
-                    self.ws = ws
-                    await self.startup(voices[0])
-                    
-                    # Process dialogues sequentially
-                    for i in range(len(dialogues)):
-                        await self.send_text(dialogues[i], voices[i])
-                        await self.receive_audio(output_files[i])
-                    return
-                    
-            except websockets.exceptions.ConnectionClosedError as e:
-                last_exception = e
-                if attempt < max_retries - 1:
-                    print(f"Connection lost. Retrying in 5 seconds... (Attempt {attempt + 1}/{max_retries})")
-                    await asyncio.sleep(5)
-                else:
-                    print("Max retries reached. Unable to reconnect.")
-                    raise last_exception
-
-def parse_conversation(file_path):
-    with open(file_path, 'r', encoding='utf-8') as file:
-        content = file.read()
-    
-    lines = content.strip().split('\n')
-    speaker_a_lines = []
-    speaker_b_lines = []
-    
-    for line in lines:
-        if line.strip():
-            if line.startswith("Speaker A:"):
-                speaker_a_lines.append(line.replace("Speaker A:", "").strip())
-            elif line.startswith("Speaker B:"):
-                speaker_b_lines.append(line.replace("Speaker B:", "").strip())
-    
-    return speaker_a_lines, speaker_b_lines
-
-def combine_audio_files(file_list, output_file):
-    combined = AudioSegment.empty()
-    for file in file_list:
-        audio = AudioSegment.from_wav(file)
-        # Ensure stereo
-        if audio.channels == 1:
-            audio = audio.set_channels(2)
-        combined += audio
-    combined.export(output_file, format="wav")
+def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
+    """Save PCM data to a wave file."""
+    with wave.open(filename, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(rate)
+        wf.writeframes(pcm)
 
 def read_file_content(file_path):
+    """Read file content."""
     with open(file_path, 'r', encoding='utf-8') as file:
         return file.read()
 
-async def setup_environment():
-    if not os.getenv('GOOGLE_API_KEY'):
-        raise EnvironmentError("GOOGLE_API_KEY not found in environment variables")
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    return script_dir
+def get_chapter_files():
+    """Get all chapter files sorted by name."""
+    chapter_files = glob.glob('chapters/chapter_*.txt')
+    return sorted(chapter_files)
 
-def read_and_parse_inputs():
-    system_instructions = read_file_content('system_instructions.txt')
-    full_script = read_file_content('podcast_script.txt')
-    speaker_a_lines, speaker_b_lines = parse_conversation('podcast_script.txt')
-    return system_instructions, full_script, speaker_a_lines, speaker_b_lines
+def generate_chapter_audio(chapter_text, system_instructions, output_file):
+    """Generate TTS audio for a single chapter using Gemini 2.5 Pro TTS."""
+    
+    # Create client with API key
+    client = genai.Client(api_key=GOOGLE_API_KEY)
+    
+    # Create the narration prompt
+    prompt = f"""Using a professional, engaging, and captivating voice:
 
-def prepare_speaker_dialogues(system_instructions, full_script, speaker_lines, voice, temp_dir):
-    dialogues = [system_instructions + "\n\n" + full_script]
-    voices = [voice]
-    output_files = [os.path.join(temp_dir, f"speaker_{voice}_initial.wav")]
+{system_instructions}
 
-    for i, line in enumerate(speaker_lines):
-        dialogues.append(line)
-        voices.append(voice)
-        output_files.append(os.path.join(temp_dir, f"speaker_{voice}_{i}.wav"))
+Please narrate the following chapter with professional charm, appropriate pacing, and compelling delivery. Make every word feel meaningful and engaging:
 
-    return dialogues, voices, output_files
+{chapter_text}"""
+    
+    response = client.models.generate_content(
+        model="gemini-2.5-pro-preview-tts",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=NARRATOR_VOICE,
+                    )
+                )
+            )
+        )
+    )
+    
+    # Extract audio data
+    data = response.candidates[0].content.parts[0].inline_data.data
+    
+    # Save to wave file
+    wave_file(output_file, data)
+    print(f"Chapter audio saved to {output_file}")
+    return output_file
 
-async def process_speaker(generator, dialogues, output_files, voices):
-    await generator.run(dialogues, output_files, voices)
+def combine_chapters(audio_files, output_file):
+    """Combine multiple chapter audio files into a single audiobook."""
+    print("Combining chapters into complete audiobook...")
+    combined = AudioSegment.empty()
+    
+    for audio_file in audio_files:
+        print(f"Adding {audio_file}")
+        audio = AudioSegment.from_wav(audio_file)
+        
+        # Ensure stereo
+        if audio.channels == 1:
+            audio = audio.set_channels(2)
+            
+        # Add the chapter audio
+        combined += audio
+        
+        # Add a brief pause between chapters (2 seconds)
+        pause = AudioSegment.silent(duration=2000)
+        combined += pause
+    
+    combined.export(output_file, format="wav")
+    print(f"Complete audiobook saved to {output_file}")
 
-def interleave_output_files(speaker_a_files, speaker_b_files):
-    all_output_files = []
-    min_length = min(len(speaker_a_files), len(speaker_b_files))
-
-    for i in range(min_length):
-        all_output_files.extend([speaker_a_files[i], speaker_b_files[i]])
-
-    all_output_files.extend(speaker_a_files[min_length:])
-    all_output_files.extend(speaker_b_files[min_length:])
-
-    return all_output_files
-
-async def main():
-    script_dir = await setup_environment()
-
-    with tempfile.TemporaryDirectory(dir=script_dir) as temp_dir:
-        system_instructions, full_script, speaker_a_lines, speaker_b_lines = read_and_parse_inputs()
-
-        dialogues_a, voices_a, output_files_a = prepare_speaker_dialogues(
-            system_instructions, full_script, speaker_a_lines, VOICE_A, temp_dir)
-        dialogues_b, voices_b, output_files_b = prepare_speaker_dialogues(
-            system_instructions, full_script, speaker_b_lines, VOICE_B, temp_dir)
-
-        generator = AudioGenerator()
-        await process_speaker(generator, dialogues_a, output_files_a, voices_a)
-        await process_speaker(generator, dialogues_b, output_files_b, voices_b)
-
-        all_output_files = interleave_output_files(output_files_a[1:], output_files_b[1:])
-        final_output = "final_podcast.wav"
-        combine_audio_files(all_output_files, final_output)
-        print(f"Final podcast audio created: {final_output}")
-
-    print("Temporary files cleaned up")
+def main():
+    try:
+        # Read system instructions
+        system_instructions = read_file_content('system_instructions.txt')
+        
+        # Get all chapter files
+        chapter_files = get_chapter_files()
+        
+        if not chapter_files:
+            print("No chapter files found in chapters/ directory!")
+            print("Please add chapter files named like: chapter_01.txt, chapter_02.txt, etc.")
+            return
+        
+        print(f"Found {len(chapter_files)} chapters to process")
+        print(f"Using narrator voice: {NARRATOR_VOICE}")
+        
+        # Create output directory for individual chapters
+        os.makedirs('output', exist_ok=True)
+        
+        generated_files = []
+        
+        # Process each chapter
+        for chapter_file in chapter_files:
+            chapter_name = os.path.basename(chapter_file).replace('.txt', '')
+            output_file = f"output/{chapter_name}.wav"
+            
+            print(f"\nProcessing {chapter_file}...")
+            
+            # Read chapter content
+            chapter_text = read_file_content(chapter_file)
+            
+            # Generate audio for this chapter
+            generate_chapter_audio(chapter_text, system_instructions, output_file)
+            generated_files.append(output_file)
+        
+        # Combine all chapters into a complete audiobook
+        if len(generated_files) > 1:
+            print(f"\nCombining {len(generated_files)} chapters...")
+            combine_chapters(generated_files, "complete_audiobook.wav")
+        else:
+            # If only one chapter, just copy it as the complete audiobook
+            print("Single chapter detected, creating audiobook...")
+            audio = AudioSegment.from_wav(generated_files[0])
+            audio.export("complete_audiobook.wav", format="wav")
+        
+        print(f"\n✅ Audiobook generation complete!")
+        print(f"📚 Individual chapters: output/")
+        print(f"🎧 Complete audiobook: complete_audiobook.wav")
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

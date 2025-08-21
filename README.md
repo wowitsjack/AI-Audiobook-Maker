@@ -1,142 +1,182 @@
-# gemini-2-tts
+# Gemini 2.5 Audiobook Generator
 
-AI-Powered Podcast Generator: A Python-based tool that converts text scripts into realistic audio podcasts using Google's Generative AI API. This project leverages advanced text-to-speech technology to create dynamic, multi-speaker conversations with customizable voices.
+AI-Powered Audiobook Generator: A Python-based tool that converts written book chapters into professional audiobook narration using Google's Gemini 2.5 Pro TTS API. This project leverages advanced text-to-speech technology to create engaging, single-narrator audiobooks with customizable voices and natural storytelling delivery.
 
-[![Create Unlimited Podcast Audio with Python and Google’s AI: A Step-by-Step Guide](https://img.youtube.com/vi/cu-56pBQSEM/maxresdefault.jpg)](https://www.youtube.com/watch?v=cu-56pBQSEM)
+## Features
 
-Features:
+- **Professional Audiobook Narration**: Single narrator with consistent voice throughout
+- **Chapter-Based Processing**: Automatically processes multiple chapters and combines them
+- **30 Voice Options**: Choose from a wide variety of narrator voices with different characteristics
+- **Smart Audio Combining**: Automatically combines chapters with appropriate pauses
+- **Customizable Narration Style**: Professional audiobook delivery with proper pacing and emotion
+- **Individual Chapter Output**: Access individual chapter audio files for editing
 
-- Text-to-speech conversion using Google's Generative AI
-- Support for multiple speakers with distinct voices
-- Automatic audio file generation and combination
-- Customizable voice selection
-- Robust error handling and retry mechanisms
-  
-Prerequisites:
+## Prerequisites
 
 - Python 3.8 or higher
 - FFmpeg installed and accessible in system PATH
 - Google API key for Generative AI services
-  
-System Dependencies:
 
-Windows:
+## System Dependencies
 
-- Microsoft Visual C++ 14.0 or greater
-- FFmpeg
-  
-Linux:
-
+**Linux:**
 ```bash
 sudo apt-get install portaudio19-dev python3-dev ffmpeg
 ```
 
-macOS:
-
+**macOS:**
 ```bash
 brew install portaudio ffmpeg
 ```
 
-Installation:
+**Windows:**
+- Microsoft Visual C++ 14.0 or greater
+- FFmpeg
 
-1) Clone the repository:
+## Installation
+
+1) **Clone the repository:**
 ```bash
 git clone https://github.com/agituts/gemini-2-tts.git
 cd gemini-2-tts
 ```
-2) Create and activate virtual environment:
 
-For Windows:
+2) **Create and activate virtual environment:**
+
+*For Windows:*
 ```bash
 python -m venv venv
 .\venv\Scripts\activate
 ```
-For Linux/MacOS:
+
+*For Linux/MacOS:*
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
-3) Install required Python packages:
+
+3) **Install required Python packages:**
 ```bash
 pip install -r requirements.txt
 ```
-4) Create a .env file in the project root:
+
+4) **Create a .env file in the project root:**
 ```bash
 GOOGLE_API_KEY=your_google_api_key_here
-VOICE_A=Puck    # Optional: Default is Puck; Current options are Puck, Charon, Kore, Fenrir, Aoede
-VOICE_B=Kore    # Optional: Default is Kore; Current options are Puck, Charon, Kore, Fenrir, Aoede
+NARRATOR_VOICE=Charon    # Choose your preferred narrator voice
 ```
-Note: To deactivate the virtual environment when you're done, simply run:
+
+## Project Structure
+
+```
+gemini-2-tts/
+├── chapters/           # Directory for chapter text files
+│   ├── chapter_01.txt
+│   ├── chapter_02.txt
+│   └── ...
+├── output/            # Individual chapter audio files (auto-created)
+├── system_instructions.txt  # Narrator guidance and style instructions
+├── .env              # Configuration file
+└── app.py            # Main application
+```
+
+## Available Narrator Voices
+
+Choose from 30 professional voices with different characteristics:
+
+- **Bright**: Zephyr, Autonoe
+- **Upbeat**: Puck, Laomedeia  
+- **Informative**: Charon, Rasalgethi
+- **Firm**: Kore, Orus, Alnilam
+- **Excitable**: Fenrir
+- **Youthful**: Leda
+- **Breezy**: Aoede
+- **Easy-going**: Callirrhoe, Umbriel
+- **Breathy**: Enceladus
+- **Clear**: Iapetus, Erinome
+- **Smooth**: Algieba, Despina
+- **Gravelly**: Algenib
+- **Soft**: Achernar
+- **Even**: Schedar
+- **Mature**: Gacrux
+- **Forward**: Pulcherrima
+- **Friendly**: Achird
+- **Gentle**: Vindemiatrix
+- **Lively**: Sadachbia
+- **Casual**: Zubenelgenubi
+- **Knowledgeable**: Sadaltager
+- **Warm**: Sulafat
+
+## Usage
+
+1) **Prepare your book chapters:**
+   - Create chapter files in the `chapters/` directory
+   - Name them sequentially: `chapter_01.txt`, `chapter_02.txt`, etc.
+   - Include chapter titles and content in plain text
+
+2) **Configure narration style:**
+   - Edit `system_instructions.txt` to customize the narrator's delivery style
+   - Choose your preferred voice in the `.env` file
+
+3) **Generate your audiobook:**
 ```bash
-deactivate
-```
-
-Project Structure:
-
-  podcast_script.txt: Contains the conversation script in the format:
-```text
-Speaker A: Welcome to our podcast! Today we'll be discussing...
-Speaker B: Thanks for having me! I'm excited to...
-Speaker A: Let's start with...
-Speaker B: That's an interesting point...
-```
-  system_instructions.txt: Contains system-level instructions for voice generation in the format:
-```text
-You are a real-time energetic and enthusiastic narrator for a podcast.
-The entire podcast script is provided below this instruction.
-Your job is to narrate only the specific dialogue line provided to you in subsequent messages, responding immediately as if in real-time, using a natural, friendly, and engaging tone.
-When narrating, use the context of the entire podcast script to inform your delivery.
-Speak smoothly and conversationally, not like you are reading off a script.
-Pause naturally at commas, periods, and question marks.
-Vary your pacing slightly as a person would in real conversation.
-Do not narrate anything assigned to other speakers or identify which speaker is talking.
-Only narrate the specific dialogues provided to you.
-Do not introduce yourself or any other speaker; simply speak the dialogues as you receive them, as if they were being spoken in that moment.
-The script is designed for a podcast and contains conversational exchanges between speakers.
-Do not add any additional information unless asked.
-Remember, you must receive and acknowledge the full script first before you begin receiving and narrating individual dialogue lines.
-```
-  .env: Environment variables configuration
-  requirements.txt: Python package dependencies
-
-Usage:
-
-1) Prepare your conversation script in podcast_script.txt
-2) Run the generator:
-```bash
+source venv/bin/activate  # Linux/MacOS
 python app.py
 ```
-3) Find the generated podcast as final_podcast.wav
 
-Environment Variables:
+4) **Access your audiobook:**
+   - **Complete audiobook**: `complete_audiobook.wav`
+   - **Individual chapters**: `output/chapter_XX.wav`
 
-Create a .env file with the following variables:
-```text
+## Configuration
+
+**Environment Variables (.env):**
+```bash
 GOOGLE_API_KEY=your_google_api_key_here
-VOICE_A=Puck    # Optional: Default is Puck; Current options are Puck, Charon, Kore, Fenrir, Aoede
-VOICE_B=Kore    # Optional: Default is Kore; Current options are Puck, Charon, Kore, Fenrir, Aoede
+NARRATOR_VOICE=Charon  # Recommended: Charon (informative), Kore (firm), Algieba (smooth)
 ```
 
-Error Handling:
+**Chapter Format:**
+```text
+Chapter 1: The Beginning
 
-  The system automatically retries on connection failures
-  Maximum retry attempts: 3
-  Temporary files are automatically cleaned up
-  
-Output:
+Your chapter content here. The narrator will read this with professional 
+audiobook delivery, including proper pacing, emotion, and clarity.
 
-  Individual speaker audio files are generated temporarily
-  Final output is combined into final_podcast.wav
-  All temporary files are automatically cleaned up
-  
-License:
+Dialogue will be handled naturally, and the narrator will adjust tone 
+appropriately for different scenes and emotions.
+```
+
+## Output
+
+- **Individual Chapter Files**: Each chapter is saved as a separate WAV file in the `output/` directory
+- **Complete Audiobook**: All chapters are combined with appropriate pauses into `complete_audiobook.wav`
+- **Professional Quality**: 24kHz, stereo audio suitable for distribution
+
+## Supported Languages
+
+The TTS models automatically detect language and support 24 languages including:
+English, Spanish, French, German, Italian, Portuguese, Japanese, Korean, Chinese, Hindi, Arabic, and more.
+
+## Error Handling
+
+- Automatic retry mechanisms for API calls
+- Graceful handling of missing chapter files
+- Clear error messages and progress indicators
+- Temporary file cleanup
+
+## License
 
 MIT License
 
-Contributing:
+## Contributing
 
 1) Fork the repository
 2) Create your feature branch
 3) Commit your changes
 4) Push to the branch
 5) Create a new Pull Request
+
+---
+
+**Note**: This project uses Google's Gemini 2.5 Pro TTS API for high-quality, natural-sounding audiobook narration. Ensure you have a valid Google AI API key before use.

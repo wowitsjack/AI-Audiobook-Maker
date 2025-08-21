@@ -1,3 +1,33 @@
 __pycache__/
 *.pyc
 .env
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Generated audio files
+*.wav
+*.mp3
+*.m4a
+*.flac
+
+# Output directories
+output/
+temp/
+
+# Test files
+complete_audiobook.*
+final_podcast.*
+book_content.txt
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
