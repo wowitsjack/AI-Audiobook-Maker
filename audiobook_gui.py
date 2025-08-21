@@ -9,6 +9,7 @@ import webbrowser
 from PIL import Image
 import subprocess
 import sys
+import json
 
 # Import our audiobook generation logic
 from app import generate_chapter_audio, combine_chapters, read_file_content, load_config
@@ -65,6 +66,14 @@ class AudiobookGeneratorGUI:
         self.is_generating = False
         self.file_chunks = {}  # Initialize chunk storage
         
+        # Audio encoding options
+        self.output_format = tk.StringVar(value="WAV")
+        self.mp3_bitrate = tk.StringVar(value="192")
+        self.m4b_chapters = tk.BooleanVar(value=True)
+        
+        # Load saved prompts and settings
+        self.load_saved_settings()
+        
         # Voice options with descriptions
         self.voice_options = {
             'Kore': 'Kore (Firm & Confident)',
@@ -101,6 +110,51 @@ class AudiobookGeneratorGUI:
         
         self.create_widgets()
     
+    def load_saved_settings(self):
+        """Load saved settings and prompts from config file"""
+        settings_file = os.path.join(self.config_dir, 'settings.json')
+        try:
+            if os.path.exists(settings_file):
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    
+                # Load last used prompt
+                if 'last_prompt' in settings:
+                    self.custom_prompt.set(settings['last_prompt'])
+                    
+                # Load audio encoding preferences
+                if 'output_format' in settings:
+                    self.output_format.set(settings['output_format'])
+                if 'mp3_bitrate' in settings:
+                    self.mp3_bitrate.set(settings['mp3_bitrate'])
+                if 'm4b_chapters' in settings:
+                    self.m4b_chapters.set(settings['m4b_chapters'])
+                    
+                # Load saved custom prompts
+                self.saved_prompts = settings.get('saved_prompts', [])
+            else:
+                self.saved_prompts = []
+        except Exception as e:
+            print(f"Could not load settings: {e}")
+            self.saved_prompts = []
+    
+    def save_settings(self):
+        """Save current settings and prompts to config file"""
+        settings_file = os.path.join(self.config_dir, 'settings.json')
+        try:
+            settings = {
+                'last_prompt': self.custom_prompt.get(),
+                'output_format': self.output_format.get(),
+                'mp3_bitrate': self.mp3_bitrate.get(),
+                'm4b_chapters': self.m4b_chapters.get(),
+                'saved_prompts': getattr(self, 'saved_prompts', [])
+            }
+            
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Could not save settings: {e}")
+    
     def setup_working_directory(self):
         """Set up working directory in home folder for the audiobook generator"""
         self.working_dir = os.path.expanduser('~/AI-Audiobook-Generator')
@@ -118,38 +172,8 @@ class AudiobookGeneratorGUI:
         os.makedirs(self.default_chapters_path, exist_ok=True)
         os.makedirs(self.default_output_path, exist_ok=True)
         
-        # Create sample chapter files if they don't exist
-        sample_chapter1 = os.path.join(self.default_chapters_path, 'sample_chapter_01.txt')
-        sample_chapter2 = os.path.join(self.default_chapters_path, 'sample_chapter_02.txt')
+        # Create README file if it doesn't exist
         readme_file = os.path.join(self.working_dir, 'README.txt')
-        
-        if not os.path.exists(sample_chapter1):
-            with open(sample_chapter1, 'w', encoding='utf-8') as f:
-                f.write("""Welcome to AI Audiobook Generator!
-
-This is a sample chapter to demonstrate the audiobook generation capabilities.
-
-The AI Audiobook Generator uses Google's advanced Gemini 2.5 Pro text-to-speech technology to create professional-quality audiobooks from your written content.
-
-Simply place your chapter files in this chapters folder, customize your narration style, and generate high-quality audio content with ease.
-
-Enjoy creating amazing audiobooks!""")
-        
-        if not os.path.exists(sample_chapter2):
-            with open(sample_chapter2, 'w', encoding='utf-8') as f:
-                f.write("""Chapter 2: Getting Started
-
-To begin using the AI Audiobook Generator, follow these simple steps:
-
-1. Add your chapter files to the chapters folder (supports .txt and .md files)
-2. Configure your Google AI API key in the application
-3. Choose your preferred narrator voice from 30 available options
-4. Customize the narration style to match your content
-5. Click Generate Audiobook to create your professional audio content
-
-The application supports intelligent text chunking for longer files, ensuring optimal audio generation quality.
-
-Happy audiobook creating!""")
         
         if not os.path.exists(readme_file):
             with open(readme_file, 'w', encoding='utf-8') as f:
@@ -332,12 +356,40 @@ Created with ❤️ for audiobook enthusiasts""")
         right_frame.grid_rowconfigure(4, weight=1)
         
         # Custom Prompt Section
-        ctk.CTkLabel(right_frame, text="✏️ Custom Narration Style", font=ctk.CTkFont(size=18, weight="bold")).grid(
-            row=0, column=0, pady=(15, 10), sticky="w", padx=15
+        prompt_header = ctk.CTkFrame(right_frame, fg_color="transparent")
+        prompt_header.grid(row=0, column=0, sticky="ew", padx=15, pady=(15, 5))
+        prompt_header.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(prompt_header, text="✏️ Custom Narration Style", font=ctk.CTkFont(size=18, weight="bold")).grid(
+            row=0, column=0, sticky="w"
         )
         
+        # Prompt management buttons
+        prompt_mgmt_frame = ctk.CTkFrame(prompt_header, fg_color="transparent")
+        prompt_mgmt_frame.grid(row=0, column=1, sticky="e")
+        
+        save_prompt_btn = ctk.CTkButton(
+            prompt_mgmt_frame,
+            text="💾 Save",
+            command=self.save_current_prompt,
+            width=60,
+            height=25,
+            font=ctk.CTkFont(size=10)
+        )
+        save_prompt_btn.grid(row=0, column=0, padx=(0, 5))
+        
+        load_prompt_btn = ctk.CTkButton(
+            prompt_mgmt_frame,
+            text="📂 Load",
+            command=self.load_saved_prompt,
+            width=60,
+            height=25,
+            font=ctk.CTkFont(size=10)
+        )
+        load_prompt_btn.grid(row=0, column=1)
+        
         self.prompt_textbox = ctk.CTkTextbox(
-            right_frame, 
+            right_frame,
             height=80,
             font=ctk.CTkFont(size=11)
         )
@@ -358,8 +410,8 @@ Created with ❤️ for audiobook enthusiasts""")
         
         for i, (name, prompt) in enumerate(presets):
             btn = ctk.CTkButton(
-                preset_frame, 
-                text=name, 
+                preset_frame,
+                text=name,
                 command=lambda p=prompt: self.set_preset_prompt(p),
                 height=25,
                 font=ctk.CTkFont(size=10)
@@ -392,7 +444,7 @@ Created with ❤️ for audiobook enthusiasts""")
         
         self.preview_btn = ctk.CTkButton(
             preview_edit_frame,
-            text="👁️ Preview",
+            text="👁️ Preview Chunk Text",
             command=self.preview_chapter,
             height=45,
             font=ctk.CTkFont(size=11)
@@ -414,13 +466,63 @@ Created with ❤️ for audiobook enthusiasts""")
         self.progress_bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
         self.progress_bar.set(0)
         
+        # Audio Encoding Options Section
+        encoding_frame = ctk.CTkFrame(right_frame)
+        encoding_frame.grid(row=4, column=0, sticky="ew", padx=15, pady=(0, 10))
+        encoding_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        
+        ctk.CTkLabel(encoding_frame, text="🎵 Audio Encoding Options", font=ctk.CTkFont(size=16, weight="bold")).grid(
+            row=0, column=0, columnspan=3, pady=(10, 8), sticky="w", padx=10
+        )
+        
+        # Output format selection
+        ctk.CTkLabel(encoding_frame, text="Format:", font=ctk.CTkFont(size=12)).grid(
+            row=1, column=0, sticky="w", padx=10, pady=5
+        )
+        format_menu = ctk.CTkOptionMenu(
+            encoding_frame,
+            variable=self.output_format,
+            values=["WAV", "MP3", "M4B"],
+            command=self.on_format_change,
+            height=30,
+            font=ctk.CTkFont(size=11),
+            width=80
+        )
+        format_menu.grid(row=1, column=1, sticky="w", padx=5, pady=5)
+        
+        # MP3 bitrate (only visible when MP3/M4B selected)
+        self.bitrate_label = ctk.CTkLabel(encoding_frame, text="Bitrate:", font=ctk.CTkFont(size=12))
+        self.bitrate_label.grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        
+        self.bitrate_menu = ctk.CTkOptionMenu(
+            encoding_frame,
+            variable=self.mp3_bitrate,
+            values=["128", "192", "256", "320"],
+            height=30,
+            font=ctk.CTkFont(size=11),
+            width=80
+        )
+        self.bitrate_menu.grid(row=2, column=1, sticky="w", padx=5, pady=5)
+        
+        # M4B chapter support
+        self.chapters_checkbox = ctk.CTkCheckBox(
+            encoding_frame,
+            text="Include chapter markers (M4B)",
+            variable=self.m4b_chapters,
+            font=ctk.CTkFont(size=11)
+        )
+        self.chapters_checkbox.grid(row=2, column=2, sticky="w", padx=10, pady=5)
+        
+        # Update visibility based on initial format
+        self.on_format_change(self.output_format.get())
+        
         # Status and log area
         self.status_text = ctk.CTkTextbox(
-            right_frame, 
-            height=150,
+            right_frame,
+            height=120,
             font=ctk.CTkFont(size=10)
         )
-        self.status_text.grid(row=4, column=0, sticky="nsew", padx=15, pady=(0, 15))
+        self.status_text.grid(row=5, column=0, sticky="nsew", padx=15, pady=(0, 15))
         
         # Bottom buttons
         bottom_frame = ctk.CTkFrame(self.root)
@@ -465,6 +567,157 @@ Created with ❤️ for audiobook enthusiasts""")
         """Set a preset prompt"""
         self.prompt_textbox.delete("1.0", "end")
         self.prompt_textbox.insert("1.0", prompt)
+        
+    def save_current_prompt(self):
+        """Save current prompt to saved prompts list"""
+        current_prompt = self.prompt_textbox.get("1.0", "end-1c").strip()
+        if not current_prompt:
+            messagebox.showwarning("Warning", "No prompt to save!")
+            return
+            
+        # Get name for the prompt
+        dialog = ctk.CTkInputDialog(text="Enter name for this prompt:", title="Save Prompt")
+        prompt_name = dialog.get_input()
+        
+        if prompt_name:
+            if not hasattr(self, 'saved_prompts'):
+                self.saved_prompts = []
+                
+            # Check if name already exists
+            existing_names = [p['name'] for p in self.saved_prompts]
+            if prompt_name in existing_names:
+                result = messagebox.askyesno("Confirm", f"A prompt named '{prompt_name}' already exists. Replace it?")
+                if result:
+                    # Remove existing prompt with same name
+                    self.saved_prompts = [p for p in self.saved_prompts if p['name'] != prompt_name]
+                else:
+                    return
+            
+            # Add new prompt
+            self.saved_prompts.append({
+                'name': prompt_name,
+                'prompt': current_prompt
+            })
+            
+            # Save to file
+            self.save_settings()
+            self.log_message(f"💾 Saved prompt: {prompt_name}")
+            messagebox.showinfo("Success", f"Prompt '{prompt_name}' saved successfully!")
+    
+    def load_saved_prompt(self):
+        """Load a saved prompt"""
+        if not hasattr(self, 'saved_prompts') or not self.saved_prompts:
+            messagebox.showinfo("Info", "No saved prompts found.")
+            return
+            
+        # Create selection window
+        selection_window = ctk.CTkToplevel(self.root)
+        selection_window.title("Load Saved Prompt")
+        selection_window.geometry("600x400")
+        selection_window.transient(self.root)
+        selection_window.grab_set()
+        
+        # Center the window
+        selection_window.geometry("+%d+%d" % (
+            self.root.winfo_rootx() + 50,
+            self.root.winfo_rooty() + 50
+        ))
+        
+        ctk.CTkLabel(selection_window, text="📂 Saved Prompts", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        # Create listbox for prompts
+        prompt_frame = ctk.CTkFrame(selection_window)
+        prompt_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.prompt_listbox = tk.Listbox(
+            prompt_frame,
+            height=10,
+            bg="#2b2b2b",
+            fg="white",
+            selectbackground="#1f6aa5",
+            font=("Segoe UI", 11)
+        )
+        self.prompt_listbox.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Populate listbox
+        for prompt_info in self.saved_prompts:
+            self.prompt_listbox.insert(tk.END, prompt_info['name'])
+        
+        # Preview area
+        preview_label = ctk.CTkLabel(selection_window, text="Preview:", font=ctk.CTkFont(size=12, weight="bold"))
+        preview_label.pack(anchor="w", padx=20, pady=(10, 5))
+        
+        self.prompt_preview = ctk.CTkTextbox(selection_window, height=80, font=ctk.CTkFont(size=10))
+        self.prompt_preview.pack(fill="x", padx=20, pady=(0, 10))
+        
+        # Bind selection event
+        def on_prompt_select(event):
+            selection = self.prompt_listbox.curselection()
+            if selection:
+                prompt_info = self.saved_prompts[selection[0]]
+                self.prompt_preview.delete("1.0", "end")
+                self.prompt_preview.insert("1.0", prompt_info['prompt'])
+        
+        self.prompt_listbox.bind('<<ListboxSelect>>', on_prompt_select)
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(selection_window, fg_color="transparent")
+        button_frame.pack(fill="x", padx=20, pady=10)
+        
+        def load_selected():
+            selection = self.prompt_listbox.curselection()
+            if selection:
+                prompt_info = self.saved_prompts[selection[0]]
+                self.prompt_textbox.delete("1.0", "end")
+                self.prompt_textbox.insert("1.0", prompt_info['prompt'])
+                self.log_message(f"📂 Loaded prompt: {prompt_info['name']}")
+                selection_window.destroy()
+            else:
+                messagebox.showwarning("Warning", "Please select a prompt to load.")
+        
+        def delete_selected():
+            selection = self.prompt_listbox.curselection()
+            if selection:
+                prompt_info = self.saved_prompts[selection[0]]
+                result = messagebox.askyesno("Confirm", f"Delete prompt '{prompt_info['name']}'?")
+                if result:
+                    del self.saved_prompts[selection[0]]
+                    self.save_settings()
+                    self.prompt_listbox.delete(selection[0])
+                    self.prompt_preview.delete("1.0", "end")
+                    self.log_message(f"🗑️ Deleted prompt: {prompt_info['name']}")
+            else:
+                messagebox.showwarning("Warning", "Please select a prompt to delete.")
+        
+        load_btn = ctk.CTkButton(button_frame, text="📂 Load", command=load_selected, width=100)
+        load_btn.pack(side="left", padx=(0, 10))
+        
+        delete_btn = ctk.CTkButton(button_frame, text="🗑️ Delete", command=delete_selected, width=100)
+        delete_btn.pack(side="left", padx=(0, 10))
+        
+        cancel_btn = ctk.CTkButton(button_frame, text="❌ Cancel", command=selection_window.destroy, width=100)
+        cancel_btn.pack(side="right")
+    
+    def on_format_change(self, format_choice):
+        """Handle audio format selection changes"""
+        if format_choice == "WAV":
+            # Hide MP3/M4B specific options
+            self.bitrate_label.grid_remove()
+            self.bitrate_menu.grid_remove()
+            self.chapters_checkbox.grid_remove()
+        elif format_choice == "MP3":
+            # Show bitrate, hide chapters
+            self.bitrate_label.grid()
+            self.bitrate_menu.grid()
+            self.chapters_checkbox.grid_remove()
+        elif format_choice == "M4B":
+            # Show both bitrate and chapters
+            self.bitrate_label.grid()
+            self.bitrate_menu.grid()
+            self.chapters_checkbox.grid()
+        
+        # Save current settings
+        self.save_settings()
         
     def on_voice_change(self, voice):
         """Update voice description when voice changes"""
@@ -1167,7 +1420,7 @@ Created with ❤️ for audiobook enthusiasts""")
                 
                 self.log_message(f"✅ Completed {display_name}")
                 
-            # Combine chapters
+            # Combine chapters and convert to final format
             if len(generated_files) > 1:
                 self.log_message("🎼 Combining chunks into complete audiobook...")
                 combine_chapters(generated_files, "complete_audiobook.wav")
@@ -1176,11 +1429,15 @@ Created with ❤️ for audiobook enthusiasts""")
                 # Copy single file as complete audiobook
                 import shutil
                 shutil.copy2(generated_files[0], "complete_audiobook.wav")
+            
+            # Convert to final format if needed
+            self.progress_var.set(0.9)
+            final_file = self.convert_to_final_format("complete_audiobook.wav")
                 
             self.progress_var.set(1.0)
             self.log_message("🎉 Audiobook generation complete!")
             self.log_message("📂 Individual chunks: output/")
-            self.log_message("🎧 Complete audiobook: complete_audiobook.wav")
+            self.log_message(f"🎧 Complete audiobook: {final_file}")
             
         except Exception as e:
             self.log_message(f"❌ Error: {str(e)}")
@@ -1230,6 +1487,95 @@ Please narrate the following chapter:
         
         data = response.candidates[0].content.parts[0].inline_data.data
         wave_file(output_file, data)
+    
+    def convert_to_final_format(self, wav_file):
+        """Convert WAV file to final output format"""
+        output_format = self.output_format.get()
+        
+        if output_format == "WAV":
+            return wav_file
+        
+        # Determine output filename
+        base_name = os.path.splitext(wav_file)[0]
+        if output_format == "MP3":
+            output_file = f"{base_name}.mp3"
+        elif output_format == "M4B":
+            output_file = f"{base_name}.m4b"
+        else:
+            return wav_file
+        
+        try:
+            # Check if ffmpeg is available
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            self.log_message("⚠️ FFmpeg not found. Install FFmpeg for audio conversion.")
+            self.log_message("📄 Keeping WAV format.")
+            return wav_file
+        
+        try:
+            self.log_message(f"🔄 Converting to {output_format}...")
+            
+            # Build ffmpeg command
+            cmd = ['ffmpeg', '-i', wav_file, '-y']  # -y to overwrite output file
+            
+            if output_format == "MP3":
+                bitrate = self.mp3_bitrate.get()
+                cmd.extend(['-codec:a', 'libmp3lame', '-b:a', f'{bitrate}k'])
+            elif output_format == "M4B":
+                bitrate = self.mp3_bitrate.get()
+                cmd.extend(['-codec:a', 'aac', '-b:a', f'{bitrate}k'])
+                
+                # Add chapter markers if enabled
+                if self.m4b_chapters.get() and hasattr(self, 'file_chunks'):
+                    # Create chapter metadata for M4B
+                    chapter_file = "chapters.txt"
+                    self.create_chapter_metadata(chapter_file)
+                    cmd.extend(['-f', 'mp4'])
+            
+            cmd.append(output_file)
+            
+            # Run conversion
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                self.log_message(f"✅ Converted to {output_format}")
+                # Remove original WAV file if conversion successful
+                if os.path.exists(output_file):
+                    os.remove(wav_file)
+                return output_file
+            else:
+                self.log_message(f"❌ Conversion failed: {result.stderr}")
+                return wav_file
+                
+        except Exception as e:
+            self.log_message(f"❌ Conversion error: {str(e)}")
+            return wav_file
+    
+    def create_chapter_metadata(self, chapter_file):
+        """Create chapter metadata file for M4B format"""
+        try:
+            with open(chapter_file, 'w', encoding='utf-8') as f:
+                f.write(";FFMETADATA1\n")
+                
+                if hasattr(self, 'file_chunks'):
+                    # Estimate chapter durations (this is approximate)
+                    # In a real implementation, you'd track actual audio durations
+                    current_time = 0
+                    for i, (display_name, chunk_info) in enumerate(self.file_chunks.items()):
+                        # Rough estimate: 150 words per minute, converted to milliseconds
+                        word_count = self.count_words(chunk_info['content'])
+                        duration_ms = int((word_count / 150) * 60 * 1000)
+                        
+                        f.write(f"\n[CHAPTER]\n")
+                        f.write(f"TIMEBASE=1/1000\n")
+                        f.write(f"START={current_time}\n")
+                        f.write(f"END={current_time + duration_ms}\n")
+                        f.write(f"title=Chapter {i+1}\n")
+                        
+                        current_time += duration_ms
+                        
+        except Exception as e:
+            self.log_message(f"Warning: Could not create chapter metadata: {e}")
         
     def open_output_folder(self):
         """Open output folder in file manager"""
@@ -1287,7 +1633,25 @@ Created with ❤️ for audiobook enthusiasts and content creators"""
         
     def run(self):
         """Start the GUI application"""
+        # Set up protocol to save settings on close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.root.mainloop()
+    
+    def on_closing(self):
+        """Handle application closing - save current settings"""
+        try:
+            # Save current prompt from textbox
+            current_prompt = self.prompt_textbox.get("1.0", "end-1c").strip()
+            if current_prompt:
+                self.custom_prompt.set(current_prompt)
+            
+            # Save all settings
+            self.save_settings()
+        except Exception as e:
+            print(f"Error saving settings on close: {e}")
+        
+        # Close the application
+        self.root.destroy()
 
 def main():
     app = AudiobookGeneratorGUI()
