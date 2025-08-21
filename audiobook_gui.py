@@ -11,10 +11,11 @@ import subprocess
 import sys
 
 # Import our audiobook generation logic
-from app import generate_chapter_audio, combine_chapters, read_file_content
+from app import generate_chapter_audio, combine_chapters, read_file_content, load_config
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load configuration using the same logic as app.py
+load_config()
 
 # Set the appearance mode and color theme
 ctk.set_appearance_mode("dark")  # Modes: "System" (standard), "Dark", "Light"
@@ -39,6 +40,9 @@ class AudiobookGeneratorGUI:
         self.root = ctk.CTk()
         self.root.title("🎧 AI Audiobook Generator")
         
+        # Set up working directory and initialize paths
+        self.setup_working_directory()
+        
         # HiDPI and scaling support
         self.setup_scaling()
         
@@ -55,8 +59,8 @@ class AudiobookGeneratorGUI:
         # Variables
         self.api_key = tk.StringVar(value=os.getenv('GOOGLE_API_KEY', ''))
         self.narrator_voice = tk.StringVar(value=os.getenv('NARRATOR_VOICE', 'Kore'))
-        self.chapters_path = tk.StringVar(value='chapters')
-        self.output_path = tk.StringVar(value='output')
+        self.chapters_path = tk.StringVar(value=self.default_chapters_path)
+        self.output_path = tk.StringVar(value=self.default_output_path)
         self.custom_prompt = tk.StringVar(value='Use a professional, engaging audiobook narration style with appropriate pacing and emotion.')
         self.is_generating = False
         self.file_chunks = {}  # Initialize chunk storage
@@ -96,6 +100,91 @@ class AudiobookGeneratorGUI:
         }
         
         self.create_widgets()
+    
+    def setup_working_directory(self):
+        """Set up working directory in home folder for the audiobook generator"""
+        self.working_dir = os.path.expanduser('~/AI-Audiobook-Generator')
+        self.config_dir = os.path.expanduser('~/.config/ai-audiobook-generator')
+        
+        # Create working directories
+        os.makedirs(self.working_dir, exist_ok=True)
+        os.makedirs(self.config_dir, exist_ok=True)
+        
+        # Set default paths
+        self.default_chapters_path = os.path.join(self.working_dir, 'chapters')
+        self.default_output_path = os.path.join(self.working_dir, 'output')
+        
+        # Create subdirectories
+        os.makedirs(self.default_chapters_path, exist_ok=True)
+        os.makedirs(self.default_output_path, exist_ok=True)
+        
+        # Create sample chapter files if they don't exist
+        sample_chapter1 = os.path.join(self.default_chapters_path, 'sample_chapter_01.txt')
+        sample_chapter2 = os.path.join(self.default_chapters_path, 'sample_chapter_02.txt')
+        readme_file = os.path.join(self.working_dir, 'README.txt')
+        
+        if not os.path.exists(sample_chapter1):
+            with open(sample_chapter1, 'w', encoding='utf-8') as f:
+                f.write("""Welcome to AI Audiobook Generator!
+
+This is a sample chapter to demonstrate the audiobook generation capabilities.
+
+The AI Audiobook Generator uses Google's advanced Gemini 2.5 Pro text-to-speech technology to create professional-quality audiobooks from your written content.
+
+Simply place your chapter files in this chapters folder, customize your narration style, and generate high-quality audio content with ease.
+
+Enjoy creating amazing audiobooks!""")
+        
+        if not os.path.exists(sample_chapter2):
+            with open(sample_chapter2, 'w', encoding='utf-8') as f:
+                f.write("""Chapter 2: Getting Started
+
+To begin using the AI Audiobook Generator, follow these simple steps:
+
+1. Add your chapter files to the chapters folder (supports .txt and .md files)
+2. Configure your Google AI API key in the application
+3. Choose your preferred narrator voice from 30 available options
+4. Customize the narration style to match your content
+5. Click Generate Audiobook to create your professional audio content
+
+The application supports intelligent text chunking for longer files, ensuring optimal audio generation quality.
+
+Happy audiobook creating!""")
+        
+        if not os.path.exists(readme_file):
+            with open(readme_file, 'w', encoding='utf-8') as f:
+                f.write("""🎧 AI Audiobook Generator - Working Directory
+
+This directory contains your audiobook projects and generated content.
+
+Folder Structure:
+📁 chapters/     - Place your .txt and .md chapter files here
+📁 output/      - Generated audio files are saved here
+📄 README.txt   - This file
+
+Getting Started:
+1. Add your book chapters to the chapters/ folder
+2. Launch the AI Audiobook Generator application
+3. Configure your Google AI API key
+4. Generate professional audiobooks!
+
+For more information, visit the project on GitHub:
+https://github.com/wowitsjack/AI-Audiobook-Maker
+
+Created with ❤️ for audiobook enthusiasts""")
+        
+        # Copy configuration files if they exist
+        env_source = os.path.expanduser('~/.config/ai-audiobook-generator/.env')
+        if os.path.exists(env_source):
+            # Configuration already exists, we're good
+            pass
+        elif os.path.exists('.env'):
+            # Copy from current directory if available
+            import shutil
+            shutil.copy2('.env', env_source)
+        
+        # Change working directory to our app directory
+        os.chdir(self.working_dir)
         
     def setup_scaling(self):
         """Configure HiDPI scaling"""
@@ -1039,8 +1128,18 @@ class AudiobookGeneratorGUI:
             output_dir = self.output_path.get()
             os.makedirs(output_dir, exist_ok=True)
             
-            # Read system instructions and combine with custom prompt
-            system_instructions = read_file_content('system_instructions.txt')
+            # Read system instructions from multiple possible locations
+            system_instructions_files = [
+                'system_instructions.txt',  # Current directory
+                os.path.expanduser('~/.config/ai-audiobook-generator/system_instructions.txt'),  # System config
+            ]
+            
+            system_instructions = "Use a professional audiobook narration style."  # Default
+            for sys_file in system_instructions_files:
+                if os.path.exists(sys_file):
+                    system_instructions = read_file_content(sys_file)
+                    break
+            
             combined_instructions = f"{custom_prompt}\n\n{system_instructions}"
             
             generated_files = []

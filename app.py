@@ -6,13 +6,43 @@ from google.genai import types
 from dotenv import load_dotenv
 from pydub import AudioSegment
 
-load_dotenv()
+# Load environment variables from multiple possible locations
+def load_config():
+    """Load configuration from .env files in order of priority."""
+    config_locations = [
+        '.env',  # Current directory (for development)
+        os.path.expanduser('~/.config/ai-audiobook-generator/.env'),  # System config
+        os.path.expanduser('~/.ai-audiobook-generator.env'),  # Home directory fallback
+    ]
+    
+    loaded = False
+    for env_file in config_locations:
+        if os.path.exists(env_file):
+            load_dotenv(env_file)
+            loaded = True
+            print(f"Loaded configuration from: {env_file}")
+            break
+    
+    if not loaded:
+        print("No .env file found. Trying environment variables...")
+
+load_config()
 
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 NARRATOR_VOICE = os.getenv('NARRATOR_VOICE', 'Charon')
 
 if not GOOGLE_API_KEY:
-    raise EnvironmentError("GOOGLE_API_KEY not found in environment variables")
+    config_dir = os.path.expanduser('~/.config/ai-audiobook-generator')
+    raise EnvironmentError(f"""GOOGLE_API_KEY not found in environment variables.
+
+Please set up your API key by either:
+1. Creating a .env file in the current directory
+2. Creating {config_dir}/.env
+3. Setting the GOOGLE_API_KEY environment variable
+
+Example .env file content:
+GOOGLE_API_KEY=your_gemini_api_key_here
+NARRATOR_VOICE=Charon""")
 
 def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
     """Save PCM data to a wave file."""
@@ -26,6 +56,21 @@ def read_file_content(file_path):
     """Read file content."""
     with open(file_path, 'r', encoding='utf-8') as file:
         return file.read()
+
+def find_system_instructions():
+    """Find system instructions file in multiple locations"""
+    possible_locations = [
+        'system_instructions.txt',  # Current directory
+        os.path.expanduser('~/.config/ai-audiobook-generator/system_instructions.txt'),  # System config
+        os.path.expanduser('~/AI-Audiobook-Generator/system_instructions.txt'),  # Working directory
+    ]
+    
+    for location in possible_locations:
+        if os.path.exists(location):
+            return location
+    
+    # Return default if no file found
+    return None
 
 def get_chapter_files():
     """Get all chapter files sorted by name."""
@@ -95,8 +140,17 @@ def combine_chapters(audio_files, output_file):
 
 def main():
     try:
+        # Set up working directory
+        working_dir = os.path.expanduser('~/AI-Audiobook-Generator')
+        os.makedirs(working_dir, exist_ok=True)
+        os.chdir(working_dir)
+        
         # Read system instructions
-        system_instructions = read_file_content('system_instructions.txt')
+        sys_instructions_file = find_system_instructions()
+        if sys_instructions_file:
+            system_instructions = read_file_content(sys_instructions_file)
+        else:
+            system_instructions = "Use a professional audiobook narration style with clear diction and appropriate pacing."
         
         # Get all chapter files
         chapter_files = get_chapter_files()
@@ -104,10 +158,12 @@ def main():
         if not chapter_files:
             print("No chapter files found in chapters/ directory!")
             print("Please add chapter files named like: chapter_01.txt, chapter_02.txt, etc.")
+            print(f"Working directory: {working_dir}")
             return
         
         print(f"Found {len(chapter_files)} chapters to process")
         print(f"Using narrator voice: {NARRATOR_VOICE}")
+        print(f"Working directory: {working_dir}")
         
         # Create output directory for individual chapters
         os.makedirs('output', exist_ok=True)
