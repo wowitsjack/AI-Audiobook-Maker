@@ -15,6 +15,7 @@ import queue
 # Import our audiobook generation logic
 from app import generate_chapter_audio, combine_chapters, read_file_content, load_config
 from dotenv import load_dotenv
+from project_state import ProjectStateManager
 
 # Load configuration using the same logic as app.py
 load_config()
@@ -66,6 +67,8 @@ class AudiobookGeneratorGUI:
         self.custom_prompt = tk.StringVar(value='Use a professional, engaging audiobook narration style with appropriate pacing and emotion.')
         self.is_generating = False
         self.file_chunks = {}  # Initialize chunk storage
+        self.state_manager = ProjectStateManager(self.working_dir)
+        self.project_id = None
         
         # Audio encoding options
         self.output_format = tk.StringVar(value="WAV")
@@ -243,13 +246,25 @@ Created with ❤️ for audiobook enthusiasts""")
             ctk.set_window_scaling(1.0)
         
     def create_widgets(self):
-        # Title
+        # Title with gradient effect
+        title_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        title_frame.grid(row=0, column=0, columnspan=2, pady=(15, 20), sticky="ew")
+        title_frame.grid_columnconfigure(0, weight=1)
+
         title_label = ctk.CTkLabel(
-            self.root, 
-            text="🎧 AI Audiobook Generator",
-            font=ctk.CTkFont(size=32, weight="bold")
+            title_frame,
+            text="🎧 AI Audiobook Generator 🚀",
+            font=ctk.CTkFont(size=36, weight="bold", family="Segoe UI")
         )
-        title_label.grid(row=0, column=0, columnspan=2, pady=(15, 20), sticky="ew")
+        title_label.grid(row=0, column=0, sticky="ew")
+
+        # Add a subtle progress indicator
+        self.progress_indicator = ctk.CTkLabel(
+            title_frame,
+            text="📊 Ready to generate",
+            font=ctk.CTkFont(size=12, slant="italic")
+        )
+        self.progress_indicator.grid(row=1, column=0, sticky="ew", pady=(5, 0))
         
         # Left Column - Configuration and Chapters
         left_frame = ctk.CTkFrame(self.root)
@@ -520,6 +535,9 @@ Created with ❤️ for audiobook enthusiasts""")
         
         # Update visibility based on initial format
         self.on_format_change(self.output_format.get())
+
+        # Add project reset confirmation
+        self.reset_confirmation = None
         
         # Status and log area
         self.status_text = ctk.CTkTextbox(
@@ -536,7 +554,8 @@ Created with ❤️ for audiobook enthusiasts""")
         bottom_frame.grid_columnconfigure(1, weight=1)
         bottom_frame.grid_columnconfigure(2, weight=1)
         bottom_frame.grid_columnconfigure(3, weight=1)
-        
+        bottom_frame.grid_columnconfigure(4, weight=1)
+
         open_output_btn = ctk.CTkButton(
             bottom_frame,
             text="📂 Open Output Folder",
@@ -545,7 +564,7 @@ Created with ❤️ for audiobook enthusiasts""")
             font=ctk.CTkFont(size=12)
         )
         open_output_btn.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
-        
+
         play_btn = ctk.CTkButton(
             bottom_frame,
             text="▶️ Play Audiobook",
@@ -554,7 +573,16 @@ Created with ❤️ for audiobook enthusiasts""")
             font=ctk.CTkFont(size=12)
         )
         play_btn.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
-        
+
+        self.reset_btn = ctk.CTkButton(
+            bottom_frame,
+            text="🔄 Reset Project",
+            command=self.reset_project,
+            height=35,
+            font=ctk.CTkFont(size=12)
+        )
+        self.reset_btn.grid(row=0, column=2, padx=10, pady=10, sticky="ew")
+
         terminal_btn = ctk.CTkButton(
             bottom_frame,
             text="💻 Terminal",
@@ -562,8 +590,8 @@ Created with ❤️ for audiobook enthusiasts""")
             height=35,
             font=ctk.CTkFont(size=12)
         )
-        terminal_btn.grid(row=0, column=2, padx=10, pady=10, sticky="ew")
-        
+        terminal_btn.grid(row=0, column=3, padx=10, pady=10, sticky="ew")
+
         about_btn = ctk.CTkButton(
             bottom_frame,
             text="ℹ️ About",
@@ -571,7 +599,7 @@ Created with ❤️ for audiobook enthusiasts""")
             height=35,
             font=ctk.CTkFont(size=12)
         )
-        about_btn.grid(row=0, column=3, padx=10, pady=10, sticky="ew")
+        about_btn.grid(row=0, column=4, padx=10, pady=10, sticky="ew")
         
         # Terminal frame (initially hidden)
         self.terminal_frame = ctk.CTkFrame(self.root)
@@ -802,76 +830,13 @@ Created with ❤️ for audiobook enthusiasts""")
         """Count words in text"""
         return len(text.split())
     
-    def intelligent_chunk_text(self, text, max_words=800):
-        """Intelligently split text into chunks at paragraph boundaries"""
-        if self.count_words(text) <= max_words:
-            return [text]
-        
-        chunks = []
-        paragraphs = text.split('\n\n')
-        current_chunk = ""
-        
-        for paragraph in paragraphs:
-            # Clean up the paragraph
-            paragraph = paragraph.strip()
-            if not paragraph:
-                continue
-                
-            # Check if adding this paragraph would exceed the limit
-            test_chunk = current_chunk + "\n\n" + paragraph if current_chunk else paragraph
-            
-            if self.count_words(test_chunk) <= max_words:
-                current_chunk = test_chunk
-            else:
-                # If current chunk has content, save it and start new chunk
-                if current_chunk:
-                    chunks.append(current_chunk)
-                    current_chunk = paragraph
-                else:
-                    # If single paragraph is too long, split by sentences
-                    sentences = paragraph.split('. ')
-                    current_sentence_chunk = ""
-                    
-                    for sentence in sentences:
-                        sentence = sentence.strip()
-                        if not sentence:
-                            continue
-                        
-                        # Add period back if it was split
-                        if not sentence.endswith('.') and sentence != sentences[-1]:
-                            sentence += '.'
-                        
-                        test_sentence_chunk = current_sentence_chunk + " " + sentence if current_sentence_chunk else sentence
-                        
-                        if self.count_words(test_sentence_chunk) <= max_words:
-                            current_sentence_chunk = test_sentence_chunk
-                        else:
-                            if current_sentence_chunk:
-                                chunks.append(current_sentence_chunk)
-                                current_sentence_chunk = sentence
-                            else:
-                                # If single sentence is too long, just add it anyway
-                                chunks.append(sentence)
-                                current_sentence_chunk = ""
-                    
-                    if current_sentence_chunk:
-                        current_chunk = current_sentence_chunk
-                    else:
-                        current_chunk = ""
-        
-        # Add the last chunk if it has content
-        if current_chunk:
-            chunks.append(current_chunk)
-        
-        return chunks
-    
     def process_file_with_chunking(self, filepath):
         """Process a file and return list of chunks with metadata"""
         try:
             content = read_file_content(filepath)
             filename = os.path.basename(filepath)
             name_without_ext = os.path.splitext(filename)[0]
-            
+
             # Remove markdown headers and formatting for word counting
             clean_content = content
             if filepath.endswith('.md'):
@@ -881,13 +846,14 @@ Created with ❤️ for audiobook enthusiasts""")
                 clean_content = re.sub(r'\*\*(.*?)\*\*', r'\1', clean_content)  # Remove bold
                 clean_content = re.sub(r'\*(.*?)\*', r'\1', clean_content)  # Remove italic
                 clean_content = re.sub(r'`(.*?)`', r'\1', clean_content)  # Remove code
-            
+
             word_count = self.count_words(clean_content)
-            
+
             if word_count <= 800:
                 return [(filename, content, f"{name_without_ext} ({word_count} words)")]
             else:
-                chunks = self.intelligent_chunk_text(clean_content)
+                # Use the enhanced intelligent chunking from ProjectStateManager
+                chunks = self.state_manager.intelligent_chunk_text(clean_content)
                 chunk_info = []
                 for i, chunk in enumerate(chunks):
                     chunk_words = self.count_words(chunk)
@@ -895,38 +861,70 @@ Created with ❤️ for audiobook enthusiasts""")
                     chunk_display = f"{name_without_ext} Part {i+1}/{len(chunks)} ({chunk_words} words)"
                     chunk_info.append((chunk_filename, chunk, chunk_display))
                 return chunk_info
-                
+
         except Exception as e:
             self.log_message(f"❌ Error processing {filepath}: {str(e)}")
             return []
 
     def refresh_chapters(self):
-        """Refresh the chapter list"""
+        """Refresh the chapter list with visual feedback"""
         self.chapter_listbox.delete(0, tk.END)
         chapters_dir = self.chapters_path.get()
-        
+
         if os.path.exists(chapters_dir):
             # Look for both .txt and .md files
             txt_files = glob.glob(os.path.join(chapters_dir, '*.txt'))
             md_files = glob.glob(os.path.join(chapters_dir, '*.md'))
             all_files = sorted(txt_files + md_files)
-            
+
             total_chunks = 0
+            completed_count = 0
             self.file_chunks = {}  # Store chunk information
-            
+
+            # Generate project ID
+            self.project_id = self.state_manager.get_project_id(chapters_dir)
+
+            # Check for existing project state
+            project_state = self.state_manager.load_project_state(self.project_id)
+            completed_chunks = self.state_manager.get_completed_chunks(self.project_id)
+
+            if completed_chunks:
+                self.log_message(f"📋 Resuming project - {len(completed_chunks)} chunks already completed")
+            else:
+                self.log_message("📋 Starting new project")
+
             for file_path in all_files:
                 chunks = self.process_file_with_chunking(file_path)
                 if chunks:
                     for chunk_filename, chunk_content, display_name in chunks:
-                        self.chapter_listbox.insert(tk.END, display_name)
+                        # Check if this chunk is already completed
+                        output_file = os.path.join(self.output_path.get(), chunk_filename.replace('.txt', '.wav'))
+                        if output_file in completed_chunks:
+                            display_name = f"✅ {display_name} (completed)"
+                            self.chapter_listbox.insert(tk.END, display_name)
+                            self.chapter_listbox.itemconfig(tk.END, {'fg': 'green', 'bg': '#2d3a2d'})
+                            completed_count += 1
+                        else:
+                            self.chapter_listbox.insert(tk.END, display_name)
+                            self.chapter_listbox.itemconfig(tk.END, {'fg': 'white', 'bg': '#2b2b2b'})
+
                         self.file_chunks[display_name] = {
                             'original_file': file_path,
                             'chunk_filename': chunk_filename,
-                            'content': chunk_content
+                            'content': chunk_content,
+                            'completed': output_file in completed_chunks
                         }
                         total_chunks += 1
-                
+
+            # Add visual summary
+            if total_chunks > 0:
+                progress_percent = (completed_count / total_chunks) * 100
+                progress_bar = '▓' * int(progress_percent / 10) + '░' * (10 - int(progress_percent / 10))
+                self.log_message(f"📊 Project Progress: {progress_bar} {progress_percent:.1f}%")
+
             self.log_message(f"📚 Found {len(all_files)} files, {total_chunks} chunks")
+            self.log_message(f"🎯 Completed: {completed_count}/{total_chunks} chunks")
+
             if any(self.count_words(read_file_content(f)) > 800 for f in all_files):
                 self.log_message("📄 Large files automatically split into chunks")
         else:
@@ -1399,7 +1397,17 @@ Created with ❤️ for audiobook enthusiasts""")
         messagebox.showinfo("Success", "All chunk changes have been applied!")
             
     def log_message(self, message):
-        """Add message to status log"""
+        """Add message to status log with visual flair"""
+        # Add some emoji and color enhancements
+        if "✅" in message or "Completed" in message:
+            message = f"🟢 {message}"
+        elif "❌" in message or "Error" in message or "Warning" in message:
+            message = f"🔴 {message}"
+        elif "📋" in message or "Resuming" in message:
+            message = f"🔵 {message}"
+        elif "🎧" in message or "Starting" in message:
+            message = f"🟡 {message}"
+
         self.status_text.insert("end", f"{message}\n")
         self.status_text.see("end")
         self.root.update_idletasks()
@@ -1408,24 +1416,25 @@ Created with ❤️ for audiobook enthusiasts""")
         """Start audiobook generation in a separate thread"""
         if self.is_generating:
             return
-            
+
         # Validate inputs
         if not self.api_key.get().strip():
             messagebox.showerror("Error", "Please enter your Google API Key")
             return
-            
+
         # Update environment
         os.environ['GOOGLE_API_KEY'] = self.api_key.get().strip()
         os.environ['NARRATOR_VOICE'] = self.narrator_voice.get()
-        
+
         # Get custom prompt
         custom_prompt = self.prompt_textbox.get("1.0", "end-1c").strip()
         if not custom_prompt:
             custom_prompt = "Use a professional audiobook narration style."
-            
+
         self.is_generating = True
         self.generate_btn.configure(text="🔄 Generating...", state="disabled")
-        
+        self.log_message("🚀 Launching audiobook generation...")
+
         # Start generation in separate thread
         thread = threading.Thread(target=self.generate_audiobook, args=(custom_prompt,))
         thread.daemon = True
@@ -1435,58 +1444,89 @@ Created with ❤️ for audiobook enthusiasts""")
         """Generate audiobook (runs in separate thread)"""
         try:
             self.log_message("🎧 Starting audiobook generation...")
-            
+    
+            # Update progress indicator
+            self.progress_indicator.configure(text="🚀 Generating audiobook...")
+
             # Get chunks from the listbox
             if not hasattr(self, 'file_chunks') or not self.file_chunks:
                 self.log_message("❌ No files or chunks found!")
                 return
-                
-            chunks_to_process = list(self.file_chunks.keys())
-            self.log_message(f"📚 Processing {len(chunks_to_process)} chunks...")
-            
+
+            chunks_to_process = [k for k, v in self.file_chunks.items() if not v.get('completed', False)]
+            completed_chunks = [k for k, v in self.file_chunks.items() if v.get('completed', False)]
+
+            self.log_message(f"📚 Processing {len(chunks_to_process)} new chunks...")
+            if completed_chunks:
+                self.log_message(f"📋 {len(completed_chunks)} chunks already completed")
+
             # Create output directory
             output_dir = self.output_path.get()
             os.makedirs(output_dir, exist_ok=True)
-            
+
             # Read system instructions from multiple possible locations
             system_instructions_files = [
                 'system_instructions.txt',  # Current directory
                 os.path.expanduser('~/.config/ai-audiobook-generator/system_instructions.txt'),  # System config
             ]
-            
+
             system_instructions = "Use a professional audiobook narration style."  # Default
             for sys_file in system_instructions_files:
                 if os.path.exists(sys_file):
                     system_instructions = read_file_content(sys_file)
                     break
-            
+
             combined_instructions = f"{custom_prompt}\n\n{system_instructions}"
-            
+
             generated_files = []
-            
-            # Process each chunk
+
+            # Add already completed files
+            for display_name in completed_chunks:
+                chunk_info = self.file_chunks[display_name]
+                chunk_filename = chunk_info['chunk_filename']
+                output_file = os.path.join(output_dir, chunk_filename.replace('.txt', '.wav'))
+                if os.path.exists(output_file):
+                    generated_files.append(output_file)
+
+            # Process each new chunk
             for i, display_name in enumerate(chunks_to_process):
                 chunk_info = self.file_chunks[display_name]
                 chunk_filename = chunk_info['chunk_filename']
                 chunk_content = chunk_info['content']
-                
+
                 output_file = os.path.join(output_dir, chunk_filename.replace('.txt', '.wav'))
-                
+
                 self.log_message(f"🎵 Generating audio for {display_name}...")
-                
+
                 # Generate audio with custom prompt
-                self.generate_chapter_with_custom_prompt(
+                actual_output_file = self.generate_chapter_with_custom_prompt(
                     chunk_content, combined_instructions, output_file, custom_prompt
                 )
-                generated_files.append(output_file)
-                
+                generated_files.append(actual_output_file)
+
+                # Mark as completed
+                self.file_chunks[display_name]['completed'] = True
+                self.state_manager.mark_chunk_completed(self.project_id, output_file)
+
                 # Update progress
                 progress = (i + 1) / len(chunks_to_process) * 0.8  # 80% for individual chunks
                 self.progress_var.set(progress)
                 self.root.update_idletasks()
-                
+    
+                # Update visual feedback in chapter list
+                for idx in range(self.chapter_listbox.size()):
+                    item = self.chapter_listbox.get(idx)
+                    if item.startswith(display_name.split(' (')[0]) or display_name.startswith(item.split(' (')[0]):
+                        # Update the listbox item to show completion
+                        if not item.startswith("✅"):
+                            completed_item = f"✅ {item}"
+                            self.chapter_listbox.delete(idx)
+                            self.chapter_listbox.insert(idx, completed_item)
+                            self.chapter_listbox.itemconfig(idx, {'fg': 'green', 'bg': '#2d3a2d'})
+                        break
+    
                 self.log_message(f"✅ Completed {display_name}")
-                
+
             # Combine chapters and convert to final format
             if len(generated_files) > 1:
                 self.log_message("🎼 Combining chunks into complete audiobook...")
@@ -1496,20 +1536,26 @@ Created with ❤️ for audiobook enthusiasts""")
                 # Copy single file as complete audiobook
                 import shutil
                 shutil.copy2(generated_files[0], "complete_audiobook.wav")
-            
+
+            # Save file information for change detection
+            self.state_manager.save_file_info(self.project_id, 'chapters')
+
             # Convert to final format if needed
             self.progress_var.set(0.9)
             final_file = self.convert_to_final_format("complete_audiobook.wav")
-                
+
             self.progress_var.set(1.0)
             self.log_message("🎉 Audiobook generation complete!")
             self.log_message("📂 Individual chunks: output/")
             self.log_message(f"🎧 Complete audiobook: {final_file}")
-            
+    
+            # Update progress indicator
+            self.progress_indicator.configure(text="🎉 Generation complete!")
+
         except Exception as e:
             self.log_message(f"❌ Error: {str(e)}")
             messagebox.showerror("Error", f"Generation failed: {str(e)}")
-            
+
         finally:
             self.is_generating = False
             self.generate_btn.configure(text="🎧 Generate Audiobook", state="normal")
@@ -1519,16 +1565,16 @@ Created with ❤️ for audiobook enthusiasts""")
         from google import genai
         from google.genai import types
         import wave
-        
+
         def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
             with wave.open(filename, "wb") as wf:
                 wf.setnchannels(channels)
                 wf.setsampwidth(sample_width)
                 wf.setframerate(rate)
                 wf.writeframes(pcm)
-        
+
         client = genai.Client(api_key=os.environ['GOOGLE_API_KEY'])
-        
+
         prompt = f"""{custom_prompt}
 
 {system_instructions}
@@ -1536,7 +1582,7 @@ Created with ❤️ for audiobook enthusiasts""")
 Please narrate the following chapter:
 
 {chapter_text}"""
-        
+
         response = client.models.generate_content(
             model="gemini-2.5-pro-preview-tts",
             contents=prompt,
@@ -1551,9 +1597,15 @@ Please narrate the following chapter:
                 )
             )
         )
-        
+
         data = response.candidates[0].content.parts[0].inline_data.data
-        wave_file(output_file, data)
+
+        # Handle file collisions
+        final_output_file = self.state_manager.handle_file_collision(output_file)
+        wave_file(final_output_file, data)
+
+        # Return the actual file used
+        return final_output_file
     
     def convert_to_final_format(self, wav_file):
         """Convert WAV file to final output format"""
@@ -1698,6 +1750,32 @@ Created with ❤️ for audiobook enthusiasts and content creators"""
 
         messagebox.showinfo("About", about_text)
     
+    def reset_project(self):
+        """Reset the current project state"""
+        if not self.project_id:
+            messagebox.showinfo("Info", "No active project to reset.")
+            return
+
+        if self.is_generating:
+            messagebox.showwarning("Warning", "Cannot reset project while generation is in progress.")
+            return
+
+        # Confirm reset
+        result = messagebox.askyesno(
+            "Confirm Reset",
+            "Are you sure you want to reset the current project?\n\nThis will remove all progress and allow you to start fresh."
+        )
+
+        if result:
+            # Reset project state
+            self.state_manager.reset_project_state(self.project_id)
+            self.log_message("🔄 Project state reset successfully")
+
+            # Refresh chapters to show all as incomplete
+            self.refresh_chapters()
+
+            messagebox.showinfo("Success", "Project reset complete. You can now start fresh!")
+
     def toggle_terminal(self):
         """Toggle the terminal visibility"""
         if self.terminal_visible:

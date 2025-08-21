@@ -5,6 +5,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from pydub import AudioSegment
+from project_state import ProjectStateManager
 
 # Load environment variables from multiple possible locations
 def load_config():
@@ -79,10 +80,10 @@ def get_chapter_files():
 
 def generate_chapter_audio(chapter_text, system_instructions, output_file):
     """Generate TTS audio for a single chapter using Gemini 2.5 Pro TTS."""
-    
+
     # Create client with API key
     client = genai.Client(api_key=GOOGLE_API_KEY)
-    
+
     # Create the narration prompt
     prompt = f"""Using a professional, engaging, and captivating voice:
 
@@ -91,7 +92,7 @@ def generate_chapter_audio(chapter_text, system_instructions, output_file):
 Please narrate the following chapter with professional charm, appropriate pacing, and compelling delivery. Make every word feel meaningful and engaging:
 
 {chapter_text}"""
-    
+
     response = client.models.generate_content(
         model="gemini-2.5-pro-preview-tts",
         contents=prompt,
@@ -106,14 +107,18 @@ Please narrate the following chapter with professional charm, appropriate pacing
             )
         )
     )
-    
+
     # Extract audio data
     data = response.candidates[0].content.parts[0].inline_data.data
-    
+
+    # Handle file collisions
+    state_manager = ProjectStateManager()
+    final_output_file = state_manager.handle_file_collision(output_file)
+
     # Save to wave file
-    wave_file(output_file, data)
-    print(f"Chapter audio saved to {output_file}")
-    return output_file
+    wave_file(final_output_file, data)
+    print(f"Chapter audio saved to {final_output_file}")
+    return final_output_file
 
 def combine_chapters(audio_files, output_file):
     """Combine multiple chapter audio files into a single audiobook."""
@@ -144,46 +149,71 @@ def main():
         working_dir = os.path.expanduser('~/AI-Audiobook-Generator')
         os.makedirs(working_dir, exist_ok=True)
         os.chdir(working_dir)
-        
+
+        # Initialize project state manager
+        state_manager = ProjectStateManager(working_dir)
+
         # Read system instructions
         sys_instructions_file = find_system_instructions()
         if sys_instructions_file:
             system_instructions = read_file_content(sys_instructions_file)
         else:
             system_instructions = "Use a professional audiobook narration style with clear diction and appropriate pacing."
-        
+
         # Get all chapter files
         chapter_files = get_chapter_files()
-        
+
         if not chapter_files:
             print("No chapter files found in chapters/ directory!")
             print("Please add chapter files named like: chapter_01.txt, chapter_02.txt, etc.")
             print(f"Working directory: {working_dir}")
             return
-        
+
         print(f"Found {len(chapter_files)} chapters to process")
         print(f"Using narrator voice: {NARRATOR_VOICE}")
         print(f"Working directory: {working_dir}")
-        
+
+        # Generate project ID based on chapters
+        project_id = state_manager.get_project_id('chapters')
+        print(f"Project ID: {project_id}")
+
+        # Check for existing project state
+        project_state = state_manager.load_project_state(project_id)
+        completed_chunks = state_manager.get_completed_chunks(project_id)
+
+        if completed_chunks:
+            print(f"📋 Resuming project - {len(completed_chunks)} chunks already completed")
+        else:
+            print("📋 Starting new project")
+
         # Create output directory for individual chapters
         os.makedirs('output', exist_ok=True)
-        
+
         generated_files = []
-        
+
         # Process each chapter
         for chapter_file in chapter_files:
             chapter_name = os.path.basename(chapter_file).replace('.txt', '')
             output_file = f"output/{chapter_name}.wav"
-            
+
+            # Check if this chapter is already completed
+            if output_file in completed_chunks:
+                print(f"✅ Skipping already completed: {chapter_file}")
+                generated_files.append(output_file)
+                continue
+
             print(f"\nProcessing {chapter_file}...")
-            
+
             # Read chapter content
             chapter_text = read_file_content(chapter_file)
-            
+
             # Generate audio for this chapter
-            generate_chapter_audio(chapter_text, system_instructions, output_file)
-            generated_files.append(output_file)
-        
+            actual_output_file = generate_chapter_audio(chapter_text, system_instructions, output_file)
+            generated_files.append(actual_output_file)
+
+            # Mark as completed
+            state_manager.mark_chunk_completed(project_id, actual_output_file)
+
         # Combine all chapters into a complete audiobook
         if len(generated_files) > 1:
             print(f"\nCombining {len(generated_files)} chapters...")
@@ -193,7 +223,10 @@ def main():
             print("Single chapter detected, creating audiobook...")
             audio = AudioSegment.from_wav(generated_files[0])
             audio.export("complete_audiobook.wav", format="wav")
-        
+
+        # Save file information for change detection
+        state_manager.save_file_info(project_id, 'chapters')
+
         print(f"\n✅ Audiobook generation complete!")
         print(f"📚 Individual chapters: output/")
         print(f"🎧 Complete audiobook: complete_audiobook.wav")
