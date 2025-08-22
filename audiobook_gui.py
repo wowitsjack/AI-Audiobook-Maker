@@ -52,8 +52,8 @@ class AudiobookGeneratorGUI:
         self.setup_scaling()
         
         # Better proportions - wider and taller to accommodate all chunking controls and new features
-        self.root.geometry("1600x1100")
-        self.root.minsize(1400, 1000)
+        self.root.geometry("1600x1300")
+        self.root.minsize(1400, 1200)
         self.root.resizable(True, True)
         
         # Configure grid weight
