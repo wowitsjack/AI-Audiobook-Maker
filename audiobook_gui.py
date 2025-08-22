@@ -1804,6 +1804,7 @@ Created with ❤️ for audiobook enthusiasts""")
             # Determine which chunks to process based on resume option
             resume_option = self.resume_point.get()
             all_chunks = list(self.file_chunks.keys())
+            completed_chunks = []  # Initialize completed_chunks for all branches
             
             if resume_option == "from_beginning":
                 # Process all chunks, mark all as incomplete first
