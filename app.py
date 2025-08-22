@@ -6,6 +6,7 @@ from google.genai import types
 from dotenv import load_dotenv
 from pydub import AudioSegment
 from project_state import ProjectStateManager
+from api_retry_handler import generate_audio_with_retry, ServiceUnavailableError, MaxRetriesExceededError, HTTPAPIError
 
 # Load environment variables from multiple possible locations
 def load_config():
@@ -79,7 +80,7 @@ def get_chapter_files():
     return sorted(chapter_files)
 
 def generate_chapter_audio(chapter_text, system_instructions, output_file):
-    """Generate TTS audio for a single chapter using Gemini 2.5 Pro TTS."""
+    """Generate TTS audio for a single chapter using Gemini 2.5 Pro TTS with retry logic."""
 
     # Create client with API key
     client = genai.Client(api_key=GOOGLE_API_KEY)
@@ -93,32 +94,43 @@ Please narrate the following chapter with professional charm, appropriate pacing
 
 {chapter_text}"""
 
-    response = client.models.generate_content(
-        model="gemini-2.5-pro-preview-tts",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=NARRATOR_VOICE,
-                    )
-                )
-            )
+    # Define a logging callback for retry messages
+    def log_callback(message):
+        print(f"🔄 {message}")
+
+    try:
+        # Generate audio with retry logic
+        data = generate_audio_with_retry(
+            client=client,
+            prompt=prompt,
+            voice_name=NARRATOR_VOICE,
+            max_retries=3,
+            log_callback=log_callback
         )
-    )
 
-    # Extract audio data
-    data = response.candidates[0].content.parts[0].inline_data.data
+        # Handle file collisions
+        state_manager = ProjectStateManager()
+        final_output_file = state_manager.handle_file_collision(output_file)
 
-    # Handle file collisions
-    state_manager = ProjectStateManager()
-    final_output_file = state_manager.handle_file_collision(output_file)
+        # Save to wave file
+        wave_file(final_output_file, data)
+        print(f"Chapter audio saved to {final_output_file}")
+        return final_output_file
 
-    # Save to wave file
-    wave_file(final_output_file, data)
-    print(f"Chapter audio saved to {final_output_file}")
-    return final_output_file
+    except ServiceUnavailableError as e:
+        print(f"🚫 Service unavailable: {str(e)}")
+        print("❌ Stopping generation due to service unavailability. Please try again later.")
+        raise
+    except MaxRetriesExceededError as e:
+        print(f"❌ Maximum retries exceeded: {str(e)}")
+        print("💡 Try again later or check your internet connection.")
+        raise
+    except HTTPAPIError as e:
+        print(f"❌ API Error: {str(e)}")
+        raise
+    except Exception as e:
+        print(f"❌ Unexpected error during audio generation: {str(e)}")
+        raise
 
 def combine_chapters(audio_files, output_file):
     """Combine multiple chapter audio files into a single audiobook."""

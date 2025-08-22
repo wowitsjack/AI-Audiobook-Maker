@@ -16,6 +16,7 @@ import queue
 from app import generate_chapter_audio, combine_chapters, read_file_content, load_config
 from dotenv import load_dotenv
 from project_state import ProjectStateManager
+from api_retry_handler import generate_audio_with_retry, ServiceUnavailableError, MaxRetriesExceededError, HTTPAPIError
 
 # Load configuration using the same logic as app.py
 load_config()
@@ -1552,6 +1553,19 @@ Created with ❤️ for audiobook enthusiasts""")
             # Update progress indicator
             self.progress_indicator.configure(text="🎉 Generation complete!")
 
+        except ServiceUnavailableError as e:
+            self.log_message(f"🚫 Service Unavailable: {str(e)}")
+            self.log_message("❌ Google AI service is currently unavailable. Please try again later.")
+            messagebox.showerror("Service Unavailable",
+                                f"Google AI service is currently unavailable (503).\n\nPlease try again later.\n\nDetails: {str(e)}")
+        except MaxRetriesExceededError as e:
+            self.log_message(f"❌ Maximum Retries Exceeded: {str(e)}")
+            self.log_message("💡 Multiple server errors occurred. Try again later or check your connection.")
+            messagebox.showerror("Connection Issues",
+                                f"Multiple server errors occurred during generation.\n\nPlease try again later or check your internet connection.\n\nDetails: {str(e)}")
+        except HTTPAPIError as e:
+            self.log_message(f"❌ API Error: {str(e)}")
+            messagebox.showerror("API Error", f"API call failed: {str(e)}")
         except Exception as e:
             self.log_message(f"❌ Error: {str(e)}")
             messagebox.showerror("Error", f"Generation failed: {str(e)}")
@@ -1559,9 +1573,10 @@ Created with ❤️ for audiobook enthusiasts""")
         finally:
             self.is_generating = False
             self.generate_btn.configure(text="🎧 Generate Audiobook", state="normal")
+            self.progress_indicator.configure(text="📊 Ready to generate")
             
     def generate_chapter_with_custom_prompt(self, chapter_text, system_instructions, output_file, custom_prompt):
-        """Generate audio with custom prompt"""
+        """Generate audio with custom prompt and retry logic"""
         from google import genai
         from google.genai import types
         import wave
@@ -1583,29 +1598,45 @@ Please narrate the following chapter:
 
 {chapter_text}"""
 
-        response = client.models.generate_content(
-            model="gemini-2.5-pro-preview-tts",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=self.narrator_voice.get(),
-                        )
-                    )
-                )
+        # Define a logging callback for retry messages
+        def log_callback(message):
+            self.log_message(f"🔄 {message}")
+
+        try:
+            # Generate audio with retry logic
+            data = generate_audio_with_retry(
+                client=client,
+                prompt=prompt,
+                voice_name=self.narrator_voice.get(),
+                max_retries=3,
+                log_callback=log_callback
             )
-        )
 
-        data = response.candidates[0].content.parts[0].inline_data.data
+            # Handle file collisions
+            final_output_file = self.state_manager.handle_file_collision(output_file)
+            wave_file(final_output_file, data)
 
-        # Handle file collisions
-        final_output_file = self.state_manager.handle_file_collision(output_file)
-        wave_file(final_output_file, data)
+            # Return the actual file used
+            return final_output_file
 
-        # Return the actual file used
-        return final_output_file
+        except ServiceUnavailableError as e:
+            error_msg = f"🚫 Service unavailable: {str(e)}"
+            self.log_message(error_msg)
+            self.log_message("❌ Stopping generation due to service unavailability. Please try again later.")
+            raise
+        except MaxRetriesExceededError as e:
+            error_msg = f"❌ Maximum retries exceeded: {str(e)}"
+            self.log_message(error_msg)
+            self.log_message("💡 Try again later or check your internet connection.")
+            raise
+        except HTTPAPIError as e:
+            error_msg = f"❌ API Error: {str(e)}"
+            self.log_message(error_msg)
+            raise
+        except Exception as e:
+            error_msg = f"❌ Unexpected error during audio generation: {str(e)}"
+            self.log_message(error_msg)
+            raise
     
     def convert_to_final_format(self, wav_file):
         """Convert WAV file to final output format"""
