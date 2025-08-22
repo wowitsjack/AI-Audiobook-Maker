@@ -1,12 +1,14 @@
 import os
 import wave
 import glob
+import re
+import tiktoken
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from pydub import AudioSegment
 from project_state import ProjectStateManager
-from api_retry_handler import generate_audio_with_retry, ServiceUnavailableError, MaxRetriesExceededError, HTTPAPIError
+from api_retry_handler import ServiceUnavailableError, MaxRetriesExceededError, HTTPAPIError
 
 # Load environment variables from multiple possible locations
 def load_config():
@@ -32,6 +34,11 @@ load_config()
 
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 NARRATOR_VOICE = os.getenv('NARRATOR_VOICE', 'Charon')
+
+# Adaptive chunking - starts at 30k, reduces on server errors
+CURRENT_CHUNK_LIMIT = 30000
+CHUNK_REDUCTION_STEPS = [25000, 20000, 15000, 10000, 5000]
+CHUNK_STEP_INDEX = 0
 
 if not GOOGLE_API_KEY:
     config_dir = os.path.expanduser('~/.config/ai-audiobook-generator')
@@ -59,78 +66,346 @@ def read_file_content(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
         return file.read()
 
-def find_system_instructions():
-    """Find system instructions file in multiple locations"""
-    possible_locations = [
-        'system_instructions.txt',  # Current directory
-        os.path.expanduser('~/.config/ai-audiobook-generator/system_instructions.txt'),  # System config
-        os.path.expanduser('~/AI-Audiobook-Generator/system_instructions.txt'),  # Working directory
-    ]
+# Initialize tokenizer globally
+try:
+    tokenizer = tiktoken.get_encoding("cl100k_base")  # GPT-4 tokenizer
+except Exception:
+    # Fallback to a rough estimate if tiktoken fails
+    tokenizer = None
+
+def count_tokens(text: str) -> int:
+    """Count actual tokens in text using tiktoken."""
+    if tokenizer is None:
+        # Fallback to rough estimate
+        return max(1, len(text) // 4)
     
-    for location in possible_locations:
-        if os.path.exists(location):
-            return location
+    try:
+        return len(tokenizer.encode(text))
+    except Exception:
+        # Fallback to rough estimate if encoding fails
+        return max(1, len(text) // 4)
+
+def chunk_text_smartly(text: str, max_tokens: int = 30000) -> list[str]:
+    """Split text into chunks that stay under the token limit, breaking at natural boundaries."""
+    chunks = []
+    current_chunk = ""
     
-    # Return default if no file found
-    return None
+    # Split by paragraphs first (double newlines)
+    paragraphs = text.split('\n\n')
+    
+    for paragraph in paragraphs:
+        # Check if adding this paragraph would exceed the limit
+        test_chunk = current_chunk + ('\n\n' if current_chunk else '') + paragraph
+        
+        if count_tokens(test_chunk) <= max_tokens:
+            # Safe to add this paragraph
+            current_chunk = test_chunk
+        else:
+            # Adding this paragraph would exceed limit
+            if current_chunk:
+                # Save current chunk and start new one
+                chunks.append(current_chunk.strip())
+                # Check if single paragraph exceeds limit
+                if count_tokens(paragraph) > max_tokens:
+                    # Force split oversized paragraph
+                    para_chunks = chunk_text_smartly(paragraph, max_tokens)
+                    chunks.extend(para_chunks)
+                    current_chunk = ""
+                else:
+                    current_chunk = paragraph
+            else:
+                # Single paragraph is too large, split by sentences
+                sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+                temp_chunk = ""
+                
+                for sentence in sentences:
+                    test_sentence_chunk = temp_chunk + (' ' if temp_chunk else '') + sentence
+                    
+                    if count_tokens(test_sentence_chunk) <= max_tokens:
+                        temp_chunk = test_sentence_chunk
+                    else:
+                        if temp_chunk:
+                            chunks.append(temp_chunk.strip())
+                            # Check if single sentence exceeds limit
+                            if count_tokens(sentence) > max_tokens:
+                                # Force split oversized sentence
+                                sent_chunks = chunk_text_smartly(sentence, max_tokens)
+                                chunks.extend(sent_chunks)
+                                temp_chunk = ""
+                            else:
+                                temp_chunk = sentence
+                        else:
+                            # Single sentence is too large, force split by words
+                            words = sentence.split()
+                            word_chunk = ""
+                            
+                            for word in words:
+                                test_word_chunk = word_chunk + (' ' if word_chunk else '') + word
+                                
+                                if count_tokens(test_word_chunk) <= max_tokens:
+                                    word_chunk = test_word_chunk
+                                else:
+                                    if word_chunk:
+                                        chunks.append(word_chunk.strip())
+                                        word_chunk = word
+                                    else:
+                                        # Single word is too large - force split by characters
+                                        if count_tokens(word) > max_tokens:
+                                            # Split oversized word by characters
+                                            char_chunk = ""
+                                            for char in word:
+                                                test_char_chunk = char_chunk + char
+                                                if count_tokens(test_char_chunk) <= max_tokens:
+                                                    char_chunk = test_char_chunk
+                                                else:
+                                                    if char_chunk:
+                                                        chunks.append(char_chunk)
+                                                        char_chunk = char
+                                                    else:
+                                                        # Single character over limit (impossible with normal text)
+                                                        chunks.append(char)
+                                            if char_chunk:
+                                                word_chunk = char_chunk
+                                        else:
+                                            word_chunk = word
+                            
+                            if word_chunk:
+                                temp_chunk = word_chunk
+                
+                if temp_chunk:
+                    current_chunk = temp_chunk
+    
+    # Add the last chunk if it exists with final safety check
+    if current_chunk:
+        if count_tokens(current_chunk) > max_tokens:
+            # Force split if final chunk is still too large
+            final_chunks = chunk_text_smartly(current_chunk, max_tokens)
+            chunks.extend(final_chunks)
+        else:
+            chunks.append(current_chunk.strip())
+    
+    # Final verification pass - guarantee no chunk exceeds limit
+    verified_chunks = []
+    for chunk in chunks:
+        if chunk.strip():
+            if count_tokens(chunk) > max_tokens:
+                # Emergency character-level splitting
+                words = chunk.split()
+                char_chunk = ""
+                for word in words:
+                    test_chunk = char_chunk + (' ' if char_chunk else '') + word
+                    if count_tokens(test_chunk) <= max_tokens:
+                        char_chunk = test_chunk
+                    else:
+                        if char_chunk:
+                            verified_chunks.append(char_chunk.strip())
+                        char_chunk = word
+                if char_chunk:
+                    verified_chunks.append(char_chunk.strip())
+            else:
+                verified_chunks.append(chunk.strip())
+    
+    return verified_chunks
 
 def get_chapter_files():
     """Get all chapter files sorted by name."""
     chapter_files = glob.glob('chapters/chapter_*.txt')
     return sorted(chapter_files)
 
-def generate_chapter_audio(chapter_text, system_instructions, output_file):
-    """Generate TTS audio for a single chapter using Gemini 2.5 Pro TTS with retry logic."""
+def get_narration_system_instruction():
+    """Built-in system instruction for professional audiobook narration."""
+    return """You are a professional audiobook narrator with a captivating, engaging voice. Narrate the provided text with:
 
-    # Create client with API key
-    client = genai.Client(api_key=GOOGLE_API_KEY)
+- A warm, professional tone that draws listeners in
+- Clear, well-modulated delivery with perfect pacing
+- Appropriate character voices for dialogue
+- Smooth transitions and natural rhythm
+- Emotional depth that enhances the story
 
-    # Create the narration prompt
-    prompt = f"""Using a professional, engaging, and captivating voice:
+Focus only on narrating the content provided. Do not read any instructions or meta-commentary."""
 
-{system_instructions}
+def reduce_chunk_limit():
+    """Reduce the global chunk limit when server errors occur."""
+    global CURRENT_CHUNK_LIMIT, CHUNK_STEP_INDEX
+    
+    if CHUNK_STEP_INDEX < len(CHUNK_REDUCTION_STEPS):
+        old_limit = CURRENT_CHUNK_LIMIT
+        CURRENT_CHUNK_LIMIT = CHUNK_REDUCTION_STEPS[CHUNK_STEP_INDEX]
+        CHUNK_STEP_INDEX += 1
+        print(f"🔧 Reducing chunk limit from {old_limit:,} to {CURRENT_CHUNK_LIMIT:,} tokens due to server errors")
+        return True
+    return False
 
-Please narrate the following chapter with professional charm, appropriate pacing, and compelling delivery. Make every word feel meaningful and engaging:
+def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-preview-tts", custom_prompt=None):
+    """Generate TTS audio for a single text chunk using REST API with proper TTS prompting."""
+    global CURRENT_CHUNK_LIMIT
+    
+    # Check if chunk exceeds current limit due to adaptive reduction
+    if count_tokens(chunk_text) > CURRENT_CHUNK_LIMIT:
+        print(f"⚠️ Chunk ({count_tokens(chunk_text):,} tokens) exceeds current limit ({CURRENT_CHUNK_LIMIT:,}), re-chunking...")
+        # Re-chunk with current limit
+        sub_chunks = chunk_text_smartly(chunk_text, CURRENT_CHUNK_LIMIT)
+        
+        # Generate audio for each sub-chunk and combine
+        sub_chunk_files = []
+        base_name = chunk_output_file.replace('.wav', '')
+        
+        for i, sub_chunk in enumerate(sub_chunks, 1):
+            sub_output = f"{base_name}_sub_{i:02d}.wav"
+            sub_file = generate_chunk_audio(sub_chunk, sub_output, model, custom_prompt)  # Recursive call
+            sub_chunk_files.append(sub_file)
+        
+        # Combine sub-chunks
+        return combine_audio_chunks(sub_chunk_files, chunk_output_file)
 
-{chapter_text}"""
+    # Import rate limiter
+    from rate_limiter import generate_audio_with_quota_awareness
+    
+    # Prepend the user's exact custom prompt as a style instruction before the content
+    if custom_prompt and custom_prompt.strip():
+        # Use the user's exact prompt text as a style instruction
+        tts_prompt = f"{custom_prompt.strip()}: {chunk_text}"
+    else:
+        # Default fallback if no custom prompt provided
+        tts_prompt = f"Narrate this audiobook chapter in a professional, engaging style: {chunk_text}"
 
-    # Define a logging callback for retry messages
-    def log_callback(message):
-        print(f"🔄 {message}")
+    # Define a progress callback
+    def progress_callback(message):
+        print(f"🎤 {message}")
 
     try:
-        # Generate audio with retry logic
-        data = generate_audio_with_retry(
-            client=client,
-            prompt=prompt,
-            voice_name=NARRATOR_VOICE,
+        # Initialize Gemini client
+        client = genai.Client(api_key=GOOGLE_API_KEY)
+        
+        # Generate audio using REST API with proper TTS prompting
+        audio_data = generate_audio_with_quota_awareness(
+            client,
+            tts_prompt,  # Properly formatted TTS prompt
+            NARRATOR_VOICE,
+            model=model,
             max_retries=3,
-            log_callback=log_callback
+            progress_callback=progress_callback
         )
 
-        # Handle file collisions
-        state_manager = ProjectStateManager()
-        final_output_file = state_manager.handle_file_collision(output_file)
+        # Save audio to file
+        wave_file(chunk_output_file, audio_data)
+        print(f"Chunk audio saved to {chunk_output_file}")
+        return chunk_output_file
 
-        # Save to wave file
-        wave_file(final_output_file, data)
-        print(f"Chapter audio saved to {final_output_file}")
-        return final_output_file
-
-    except ServiceUnavailableError as e:
-        print(f"🚫 Service unavailable: {str(e)}")
-        print("❌ Stopping generation due to service unavailability. Please try again later.")
-        raise
-    except MaxRetriesExceededError as e:
-        print(f"❌ Maximum retries exceeded: {str(e)}")
-        print("💡 Try again later or check your internet connection.")
-        raise
-    except HTTPAPIError as e:
-        print(f"❌ API Error: {str(e)}")
-        raise
     except Exception as e:
-        print(f"❌ Unexpected error during audio generation: {str(e)}")
+        error_str = str(e)
+        
+        # Handle server errors with adaptive chunking
+        if "500" in error_str or "502" in error_str or "timeout" in error_str.lower():
+            print(f"🔧 Server error detected: {error_str}")
+            if reduce_chunk_limit():
+                print(f"🔄 Retrying with smaller chunks...")
+                return generate_chunk_audio(chunk_text, chunk_output_file, model, custom_prompt)  # Retry with new limit
+        
+        # Re-raise if not a server error or can't reduce further
+        print(f"❌ API Error: {error_str}")
         raise
+
+def combine_audio_chunks(chunk_files, output_file):
+    """Combine multiple audio chunks into a single file."""
+    print(f"Combining {len(chunk_files)} audio chunks...")
+    combined = AudioSegment.empty()
+    
+    for i, chunk_file in enumerate(chunk_files, 1):
+        print(f"Adding chunk {i}/{len(chunk_files)}: {chunk_file}")
+        audio = AudioSegment.from_wav(chunk_file)
+        
+        # Ensure stereo
+        if audio.channels == 1:
+            audio = audio.set_channels(2)
+        
+        # Add the chunk audio
+        combined += audio
+        
+        # Add a brief pause between chunks (0.5 seconds)
+        if i < len(chunk_files):
+            pause = AudioSegment.silent(duration=500)
+            combined += pause
+    
+    # Handle file collisions
+    state_manager = ProjectStateManager()
+    final_output_file = state_manager.handle_file_collision(output_file)
+    
+    # Export combined audio
+    combined.export(final_output_file, format="wav")
+    print(f"Combined chapter audio saved to {final_output_file}")
+    
+    # Clean up chunk files
+    for chunk_file in chunk_files:
+        try:
+            os.remove(chunk_file)
+            print(f"Cleaned up temporary chunk: {chunk_file}")
+        except Exception as e:
+            print(f"Warning: Could not clean up {chunk_file}: {e}")
+    
+    return final_output_file
+
+def generate_chapter_audio(chapter_text, output_file, model="gemini-2.5-flash-preview-tts", custom_prompt=None):
+    """Generate TTS audio for a chapter, automatically chunking if needed."""
+    global CURRENT_CHUNK_LIMIT
+    
+    # Check if chapter needs to be chunked
+    token_count = count_tokens(chapter_text)
+    
+    if token_count <= CURRENT_CHUNK_LIMIT:
+        # Small enough for single request
+        print(f"Chapter size: {token_count:,} tokens - processing as single chunk (limit: {CURRENT_CHUNK_LIMIT:,})")
+        return generate_chunk_audio(chapter_text, output_file, model, custom_prompt)
+    
+    # Chapter is too large, needs chunking
+    print(f"Chapter size: {token_count:,} tokens - splitting into chunks (limit: {CURRENT_CHUNK_LIMIT:,})...")
+    chunks = chunk_text_smartly(chapter_text, max_tokens=CURRENT_CHUNK_LIMIT)
+    print(f"Split into {len(chunks)} chunks")
+    
+    # Process chunks with smart resume capability
+    chunk_files = []
+    base_name = output_file.replace('.wav', '')
+    chunk_index = 0
+    chunk_file_counter = 1  # Separate counter for consistent file naming
+    
+    while chunk_index < len(chunks):
+        chunk = chunks[chunk_index]
+        chunk_tokens = count_tokens(chunk)
+        print(f"Processing chunk {chunk_index+1}/{len(chunks)} ({chunk_tokens:,} tokens)...")
+        
+        chunk_output = f"{base_name}_chunk_{chunk_file_counter:03d}.wav"
+        
+        try:
+            chunk_file = generate_chunk_audio(chunk, chunk_output, model, custom_prompt)
+            chunk_files.append(chunk_file)
+            chunk_index += 1  # Success - move to next chunk
+            chunk_file_counter += 1  # Increment file counter
+            
+        except (MaxRetriesExceededError, HTTPAPIError) as e:
+            # Check if this is a server error that warrants chunk size reduction
+            if ("500" in str(e) or "502" in str(e) or "timeout" in str(e).lower()):
+                if reduce_chunk_limit():
+                    print(f"🔧 Server error on chunk {chunk_index+1}, reducing limit to {CURRENT_CHUNK_LIMIT:,} tokens")
+                    
+                    # Split the failing chunk with new smaller limit
+                    sub_chunks = chunk_text_smartly(chunk, max_tokens=CURRENT_CHUNK_LIMIT)
+                    print(f"📦 Split failing chunk into {len(sub_chunks)} sub-chunks")
+                    
+                    # Replace the failing chunk with sub-chunks in the list
+                    chunks = chunks[:chunk_index] + sub_chunks + chunks[chunk_index+1:]
+                    print(f"📋 Updated processing queue: now {len(chunks)} total chunks")
+                    
+                    # Continue from the same index (first sub-chunk)
+                    continue
+                else:
+                    print(f"❌ Cannot reduce chunk size further, re-raising error")
+                    raise
+            else:
+                # Not a server error or not retryable - re-raise
+                raise
+    
+    # Combine chunks into final chapter audio
+    return combine_audio_chunks(chunk_files, output_file)
 
 def combine_chapters(audio_files, output_file):
     """Combine multiple chapter audio files into a single audiobook."""
@@ -157,20 +432,23 @@ def combine_chapters(audio_files, output_file):
 
 def main():
     try:
-        # Set up working directory
-        working_dir = os.path.expanduser('~/AI-Audiobook-Generator')
-        os.makedirs(working_dir, exist_ok=True)
-        os.chdir(working_dir)
+        # Check if chapters exist in current directory first
+        current_dir = os.getcwd()
+        current_chapters = get_chapter_files()
+        
+        if current_chapters:
+            # Use current directory if chapters are found here
+            working_dir = current_dir
+            print(f"Found chapters in current directory: {working_dir}")
+        else:
+            # Fall back to the default directory
+            working_dir = os.path.expanduser('~/AI-Audiobook-Generator')
+            os.makedirs(working_dir, exist_ok=True)
+            os.chdir(working_dir)
+            print(f"Using default working directory: {working_dir}")
 
         # Initialize project state manager
         state_manager = ProjectStateManager(working_dir)
-
-        # Read system instructions
-        sys_instructions_file = find_system_instructions()
-        if sys_instructions_file:
-            system_instructions = read_file_content(sys_instructions_file)
-        else:
-            system_instructions = "Use a professional audiobook narration style with clear diction and appropriate pacing."
 
         # Get all chapter files
         chapter_files = get_chapter_files()
@@ -219,8 +497,8 @@ def main():
             # Read chapter content
             chapter_text = read_file_content(chapter_file)
 
-            # Generate audio for this chapter
-            actual_output_file = generate_chapter_audio(chapter_text, system_instructions, output_file)
+            # Generate audio for this chapter (using default model and prompt)
+            actual_output_file = generate_chapter_audio(chapter_text, output_file)
             generated_files.append(actual_output_file)
 
             # Mark as completed

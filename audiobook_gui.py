@@ -16,7 +16,8 @@ import queue
 from app import generate_chapter_audio, combine_chapters, read_file_content, load_config
 from dotenv import load_dotenv
 from project_state import ProjectStateManager
-from api_retry_handler import generate_audio_with_retry, ServiceUnavailableError, MaxRetriesExceededError, HTTPAPIError
+from api_retry_handler import ServiceUnavailableError, MaxRetriesExceededError, HTTPAPIError
+from rate_limiter import generate_audio_with_quota_awareness, QuotaExhaustedError
 
 # Load configuration using the same logic as app.py
 load_config()
@@ -50,9 +51,9 @@ class AudiobookGeneratorGUI:
         # HiDPI and scaling support
         self.setup_scaling()
         
-        # Better proportions - wider and shorter
-        self.root.geometry("1600x800")
-        self.root.minsize(1400, 700)
+        # Better proportions - wider and taller to accommodate all chunking controls
+        self.root.geometry("1600x1000")
+        self.root.minsize(1400, 900)
         self.root.resizable(True, True)
         
         # Configure grid weight
@@ -63,6 +64,7 @@ class AudiobookGeneratorGUI:
         # Variables
         self.api_key = tk.StringVar(value=os.getenv('GOOGLE_API_KEY', ''))
         self.narrator_voice = tk.StringVar(value=os.getenv('NARRATOR_VOICE', 'Kore'))
+        self.tts_model = tk.StringVar(value=os.getenv('TTS_MODEL', 'gemini-2.5-pro-preview-tts'))
         self.chapters_path = tk.StringVar(value=self.default_chapters_path)
         self.output_path = tk.StringVar(value=self.default_output_path)
         self.custom_prompt = tk.StringVar(value='Use a professional, engaging audiobook narration style with appropriate pacing and emotion.')
@@ -78,6 +80,13 @@ class AudiobookGeneratorGUI:
         self.mp3_bitrate = tk.StringVar(value="192")
         self.m4b_chapters = tk.BooleanVar(value=True)
         
+        # Chunking options
+        self.enable_chunking = tk.BooleanVar(value=True)
+        self.chunk_word_threshold = tk.IntVar(value=800)  # Words before chunking
+        self.target_chunk_count = tk.IntVar(value=3)      # Target number of chunks
+        self.chunk_overlap = tk.IntVar(value=50)          # Overlap between chunks
+        self.min_chunk_size = tk.IntVar(value=200)        # Minimum chunk size
+        
         # Terminal variables
         self.terminal_visible = False
         self.terminal_queue = queue.Queue()
@@ -88,7 +97,7 @@ class AudiobookGeneratorGUI:
         # Voice options with descriptions
         self.voice_options = {
             'Kore': 'Kore (Firm & Confident)',
-            'Puck': 'Puck (Upbeat & Energetic)', 
+            'Puck': 'Puck (Upbeat & Energetic)',
             'Charon': 'Charon (Informative & Clear)',
             'Algieba': 'Algieba (Smooth & Polished)',
             'Enceladus': 'Enceladus (Breathy & Intimate)',
@@ -119,6 +128,12 @@ class AudiobookGeneratorGUI:
             'Alnilam': 'Alnilam (Firm & Steady)'
         }
         
+        # TTS Model options with descriptions
+        self.tts_model_options = {
+            'gemini-2.5-pro-preview-tts': '2.5 Pro TTS (Highest Quality)',
+            'gemini-2.5-flash-preview-tts': '2.5 Flash TTS (Faster & Efficient)'
+        }
+        
         self.create_widgets()
     
     def load_saved_settings(self):
@@ -140,6 +155,26 @@ class AudiobookGeneratorGUI:
                     self.mp3_bitrate.set(settings['mp3_bitrate'])
                 if 'm4b_chapters' in settings:
                     self.m4b_chapters.set(settings['m4b_chapters'])
+                
+                # Load chunking preferences
+                if 'enable_chunking' in settings:
+                    self.enable_chunking.set(settings['enable_chunking'])
+                if 'chunk_word_threshold' in settings:
+                    self.chunk_word_threshold.set(settings['chunk_word_threshold'])
+                if 'target_chunk_count' in settings:
+                    self.target_chunk_count.set(settings['target_chunk_count'])
+                if 'chunk_overlap' in settings:
+                    self.chunk_overlap.set(settings['chunk_overlap'])
+                if 'min_chunk_size' in settings:
+                    self.min_chunk_size.set(settings['min_chunk_size'])
+                
+                # Load last used chapters folder
+                if 'last_chapters_folder' in settings:
+                    self.chapters_path.set(settings['last_chapters_folder'])
+                
+                # Load TTS model preference
+                if 'tts_model' in settings:
+                    self.tts_model.set(settings['tts_model'])
                     
                 # Load saved custom prompts
                 self.saved_prompts = settings.get('saved_prompts', [])
@@ -158,6 +193,13 @@ class AudiobookGeneratorGUI:
                 'output_format': self.output_format.get(),
                 'mp3_bitrate': self.mp3_bitrate.get(),
                 'm4b_chapters': self.m4b_chapters.get(),
+                'enable_chunking': self.enable_chunking.get(),
+                'chunk_word_threshold': self.chunk_word_threshold.get(),
+                'target_chunk_count': self.target_chunk_count.get(),
+                'chunk_overlap': self.chunk_overlap.get(),
+                'min_chunk_size': self.min_chunk_size.get(),
+                'last_chapters_folder': self.chapters_path.get(),
+                'tts_model': self.tts_model.get(),
                 'saved_prompts': getattr(self, 'saved_prompts', [])
             }
             
@@ -304,7 +346,7 @@ Created with ❤️ for audiobook enthusiasts""")
             row=0, column=0, sticky="w", padx=(0, 10), pady=5
         )
         voice_menu = ctk.CTkOptionMenu(
-            voice_frame, 
+            voice_frame,
             variable=self.narrator_voice,
             values=list(self.voice_options.keys()),
             command=self.on_voice_change,
@@ -314,31 +356,198 @@ Created with ❤️ for audiobook enthusiasts""")
         )
         voice_menu.grid(row=0, column=1, sticky="w", pady=5)
         
-        ctk.CTkLabel(voice_frame, text="Chapters:", font=ctk.CTkFont(size=12)).grid(
+        # TTS Model selection
+        ctk.CTkLabel(voice_frame, text="Model:", font=ctk.CTkFont(size=12)).grid(
             row=0, column=2, sticky="w", padx=(20, 10), pady=5
         )
-        path_entry = ctk.CTkEntry(
-            voice_frame, 
-            textvariable=self.chapters_path,
+        model_menu = ctk.CTkOptionMenu(
+            voice_frame,
+            variable=self.tts_model,
+            values=list(self.tts_model_options.keys()),
+            command=self.on_model_change,
             height=30,
             font=ctk.CTkFont(size=11),
             width=150
         )
-        path_entry.grid(row=0, column=3, sticky="ew", pady=5)
+        model_menu.grid(row=0, column=3, sticky="w", pady=5)
+        
+        # Move chapters to next row
+        ctk.CTkLabel(voice_frame, text="Chapters:", font=ctk.CTkFont(size=12)).grid(
+            row=1, column=0, sticky="w", padx=(0, 10), pady=5
+        )
+        path_entry = ctk.CTkEntry(
+            voice_frame,
+            textvariable=self.chapters_path,
+            height=30,
+            font=ctk.CTkFont(size=11),
+            width=200
+        )
+        path_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=5)
         
         browse_btn = ctk.CTkButton(
-            voice_frame, 
-            text="📁", 
-            command=self.browse_chapters_folder, 
+            voice_frame,
+            text="📁",
+            command=self.browse_chapters_folder,
             width=30,
             height=30,
             font=ctk.CTkFont(size=12)
         )
-        browse_btn.grid(row=0, column=4, padx=(5, 0), pady=5)
+        browse_btn.grid(row=1, column=3, padx=(5, 0), pady=5)
+        
+        # Advanced Chunking Options
+        chunking_main_frame = ctk.CTkFrame(left_frame)
+        chunking_main_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=15, pady=(5, 10))
+        chunking_main_frame.grid_columnconfigure(0, weight=1)
+        
+        # Chunking header
+        chunking_header = ctk.CTkFrame(chunking_main_frame, fg_color="transparent")
+        chunking_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        chunking_header.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(chunking_header, text="🔧 Smart Chunking Options", font=ctk.CTkFont(size=14, weight="bold")).grid(
+            row=0, column=0, sticky="w"
+        )
+        
+        # Enable/disable chunking
+        self.chunking_checkbox = ctk.CTkCheckBox(
+            chunking_header,
+            text="Enable Smart Chunking",
+            variable=self.enable_chunking,
+            font=ctk.CTkFont(size=12),
+            command=self.on_chunking_toggle
+        )
+        self.chunking_checkbox.grid(row=0, column=1, sticky="e", padx=(10, 0))
+        
+        # Chunking controls frame
+        self.chunking_controls = ctk.CTkFrame(chunking_main_frame, fg_color="transparent")
+        self.chunking_controls.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.chunking_controls.grid_columnconfigure((0, 1), weight=1)
+        
+        # Word threshold slider
+        threshold_frame = ctk.CTkFrame(self.chunking_controls, fg_color="transparent")
+        threshold_frame.grid(row=0, column=0, sticky="ew", padx=(0, 5), pady=5)
+        threshold_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(threshold_frame, text="📏 Chunking Threshold:", font=ctk.CTkFont(size=11)).grid(
+            row=0, column=0, sticky="w", padx=(0, 5)
+        )
+        
+        self.threshold_slider = ctk.CTkSlider(
+            threshold_frame,
+            from_=200,
+            to=5000,
+            number_of_steps=48,
+            variable=self.chunk_word_threshold,
+            command=self.on_chunking_setting_change
+        )
+        self.threshold_slider.grid(row=0, column=1, sticky="ew", padx=5)
+        
+        self.threshold_label = ctk.CTkLabel(
+            threshold_frame,
+            text=f"{self.chunk_word_threshold.get()} words",
+            font=ctk.CTkFont(size=10),
+            width=80
+        )
+        self.threshold_label.grid(row=0, column=2, padx=(5, 0))
+        
+        # Target chunk count slider
+        target_frame = ctk.CTkFrame(self.chunking_controls, fg_color="transparent")
+        target_frame.grid(row=0, column=1, sticky="ew", padx=(5, 0), pady=5)
+        target_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(target_frame, text="🎯 Target Chunk Count:", font=ctk.CTkFont(size=11)).grid(
+            row=0, column=0, sticky="w", padx=(0, 5)
+        )
+        
+        self.target_slider = ctk.CTkSlider(
+            target_frame,
+            from_=2,
+            to=20,
+            number_of_steps=18,
+            variable=self.target_chunk_count,
+            command=self.on_chunking_setting_change
+        )
+        self.target_slider.grid(row=0, column=1, sticky="ew", padx=5)
+        
+        self.target_label = ctk.CTkLabel(
+            target_frame,
+            text=f"{self.target_chunk_count.get()} chunks",
+            font=ctk.CTkFont(size=10),
+            width=80
+        )
+        self.target_label.grid(row=0, column=2, padx=(5, 0))
+        
+        # Overlap and minimum size sliders
+        advanced_frame = ctk.CTkFrame(self.chunking_controls, fg_color="transparent")
+        advanced_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        advanced_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        # Overlap slider
+        overlap_frame = ctk.CTkFrame(advanced_frame, fg_color="transparent")
+        overlap_frame.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        overlap_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(overlap_frame, text="🔗 Overlap:", font=ctk.CTkFont(size=11)).grid(
+            row=0, column=0, sticky="w", padx=(0, 5)
+        )
+        
+        self.overlap_slider = ctk.CTkSlider(
+            overlap_frame,
+            from_=0,
+            to=500,
+            number_of_steps=25,
+            variable=self.chunk_overlap,
+            command=self.on_chunking_setting_change
+        )
+        self.overlap_slider.grid(row=0, column=1, sticky="ew", padx=5)
+        
+        self.overlap_label = ctk.CTkLabel(
+            overlap_frame,
+            text=f"{self.chunk_overlap.get()} words",
+            font=ctk.CTkFont(size=10),
+            width=80
+        )
+        self.overlap_label.grid(row=0, column=2, padx=(5, 0))
+        
+        # Minimum size slider
+        min_frame = ctk.CTkFrame(advanced_frame, fg_color="transparent")
+        min_frame.grid(row=0, column=1, sticky="ew", padx=(5, 0))
+        min_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(min_frame, text="📐 Min Size:", font=ctk.CTkFont(size=11)).grid(
+            row=0, column=0, sticky="w", padx=(0, 5)
+        )
+        
+        self.min_size_slider = ctk.CTkSlider(
+            min_frame,
+            from_=50,
+            to=1000,
+            number_of_steps=38,
+            variable=self.min_chunk_size,
+            command=self.on_chunking_setting_change
+        )
+        self.min_size_slider.grid(row=0, column=1, sticky="ew", padx=5)
+        
+        self.min_size_label = ctk.CTkLabel(
+            min_frame,
+            text=f"{self.min_chunk_size.get()} words",
+            font=ctk.CTkFont(size=10),
+            width=80
+        )
+        self.min_size_label.grid(row=0, column=2, padx=(5, 0))
+        
+        # Chunking info and statistics
+        self.chunking_info = ctk.CTkLabel(
+            chunking_main_frame,
+            text="💡 Files larger than threshold are automatically split using these settings",
+            font=ctk.CTkFont(size=10),
+            text_color=("gray60", "gray40")
+        )
+        self.chunking_info.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
         
         # Resume point selection
         resume_frame = ctk.CTkFrame(left_frame)
-        resume_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 5))
+        resume_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 5))
         resume_frame.grid_columnconfigure(0, weight=1)
         
         ctk.CTkLabel(resume_frame, text="🎯 Resume Options", font=ctk.CTkFont(size=14, weight="bold")).grid(
@@ -378,7 +587,7 @@ Created with ❤️ for audiobook enthusiasts""")
         
         # Chapter list with advanced management
         chapter_list_frame = ctk.CTkFrame(left_frame)
-        chapter_list_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=15, pady=(5, 15))
+        chapter_list_frame.grid(row=5, column=0, columnspan=2, sticky="nsew", padx=15, pady=(5, 15))
         chapter_list_frame.grid_columnconfigure(0, weight=1)
         chapter_list_frame.grid_rowconfigure(2, weight=1)
         
@@ -761,6 +970,9 @@ Created with ❤️ for audiobook enthusiasts""")
         sys.stdout = TerminalRedirect(self)
         sys.stderr = TerminalRedirect(self)
         
+        # Initialize chunking controls visibility
+        self.on_chunking_toggle()
+        
         # Initialize
         self.refresh_chapters()
         self.log_message("🎧 AI Audiobook Generator ready!")
@@ -926,17 +1138,212 @@ Created with ❤️ for audiobook enthusiasts""")
         """Update voice description when voice changes"""
         # Could add a status message here if needed
         pass
+    
+    def on_model_change(self, model):
+        """Handle TTS model selection changes"""
+        model_description = self.tts_model_options.get(model, model)
+        self.log_message(f"🤖 TTS Model changed to: {model_description}")
+        
+        # Save settings immediately
+        self.save_settings()
+        
+    def on_chunking_toggle(self):
+        """Handle chunking toggle changes"""
+        if self.enable_chunking.get():
+            # Show chunking controls
+            self.chunking_controls.grid()
+            threshold = self.chunk_word_threshold.get()
+            self.chunking_info.configure(text=f"💡 Files >{threshold} words are automatically split using these settings")
+            self.log_message("🔧 Smart Chunking enabled - large files will be split into smaller parts")
+        else:
+            # Hide chunking controls
+            self.chunking_controls.grid_remove()
+            self.chunking_info.configure(text="⚠️ Chunking disabled - all files processed as single pieces")
+            self.log_message("🔧 Smart Chunking disabled - files will be processed as complete pieces")
+        
+        # Save settings immediately
+        self.save_settings()
+        
+        # Refresh chapters to reflect chunking changes
+        self.refresh_chapters()
+    
+    def on_chunking_setting_change(self, value):
+        """Handle chunking slider changes"""
+        # Update labels
+        self.threshold_label.configure(text=f"{self.chunk_word_threshold.get()} words")
+        self.target_label.configure(text=f"{self.target_chunk_count.get()} chunks")
+        self.overlap_label.configure(text=f"{self.chunk_overlap.get()} words")
+        self.min_size_label.configure(text=f"{self.min_chunk_size.get()} words")
+        
+        # Update info text
+        if self.enable_chunking.get():
+            threshold = self.chunk_word_threshold.get()
+            self.chunking_info.configure(text=f"💡 Files >{threshold} words are automatically split using these settings")
+        
+        # Save settings
+        self.save_settings()
+        
+        # Refresh chapters if needed (debounced)
+        if hasattr(self, '_refresh_timer'):
+            self.root.after_cancel(self._refresh_timer)
+        self._refresh_timer = self.root.after(500, self.refresh_chapters)  # 500ms delay
         
     def browse_chapters_folder(self):
-        """Browse for chapters folder"""
-        folder = filedialog.askdirectory(title="Select Chapters Folder")
+        """Browse for chapters folder and remember location"""
+        folder = filedialog.askdirectory(
+            title="Select Chapters Folder",
+            initialdir=self.chapters_path.get() if os.path.exists(self.chapters_path.get()) else None
+        )
         if folder:
             self.chapters_path.set(folder)
+            self.save_settings()  # Save the new folder location immediately
             self.refresh_chapters()
+            self.log_message(f"📁 Chapters folder updated: {folder}")
     
     def count_words(self, text):
         """Count words in text"""
         return len(text.split())
+    
+    def intelligent_chunk_text_with_settings(self, text):
+        """Intelligent text chunking with user-defined settings, respecting paragraphs"""
+        target_count = self.target_chunk_count.get()
+        overlap_words = self.chunk_overlap.get()
+        min_size = self.min_chunk_size.get()
+        
+        # Split text into paragraphs, preserving empty lines
+        paragraphs = text.split('\n\n')
+        if not paragraphs:
+            return [text]
+        
+        # Calculate word counts for each paragraph
+        paragraph_info = []
+        total_words = 0
+        for para in paragraphs:
+            word_count = len(para.split()) if para.strip() else 0
+            paragraph_info.append({
+                'text': para,
+                'words': word_count,
+                'is_empty': not para.strip()
+            })
+            total_words += word_count
+        
+        # If text is small enough, return as single chunk
+        if total_words <= min_size or target_count <= 1:
+            return [text]
+        
+        # Calculate target words per chunk
+        target_words_per_chunk = max(min_size, total_words // target_count)
+        
+        chunks = []
+        current_chunk_text = []
+        current_word_count = 0
+        chunks_created = 0
+        
+        i = 0
+        while i < len(paragraph_info) and chunks_created < target_count:
+            para_info = paragraph_info[i]
+            para_text = para_info['text']
+            para_words = para_info['words']
+            
+            # For the last chunk, include all remaining paragraphs
+            if chunks_created == target_count - 1:
+                # Add all remaining paragraphs to final chunk
+                remaining_paras = [p['text'] for p in paragraph_info[i:]]
+                current_chunk_text.extend(remaining_paras)
+                break
+            
+            # Check if adding this paragraph would exceed target
+            if (current_word_count + para_words > target_words_per_chunk and
+                current_word_count >= min_size and
+                current_chunk_text):
+                
+                # Finalize current chunk
+                chunk_text = '\n\n'.join(current_chunk_text)
+                chunks.append(chunk_text)
+                chunks_created += 1
+                
+                # Start new chunk with overlap if specified
+                if overlap_words > 0 and current_chunk_text:
+                    # Try to include some overlap from the previous chunk
+                    last_para = current_chunk_text[-1]
+                    last_para_words = last_para.split()
+                    if len(last_para_words) > overlap_words:
+                        # Take last N words as overlap
+                        overlap_text = ' '.join(last_para_words[-overlap_words:])
+                        current_chunk_text = [overlap_text]
+                        current_word_count = overlap_words
+                    else:
+                        # Take whole last paragraph as overlap
+                        current_chunk_text = [last_para]
+                        current_word_count = len(last_para_words)
+                else:
+                    current_chunk_text = []
+                    current_word_count = 0
+            
+            # Add current paragraph to chunk
+            current_chunk_text.append(para_text)
+            current_word_count += para_words
+            i += 1
+        
+        # Add final chunk if there's content
+        if current_chunk_text:
+            chunk_text = '\n\n'.join(current_chunk_text)
+            chunks.append(chunk_text)
+        
+        # If we ended up with only one chunk, try to split the largest paragraph
+        if len(chunks) == 1 and target_count > 1:
+            return self._split_large_paragraph(text, target_count, min_size)
+        
+        return chunks
+    
+    def _split_large_paragraph(self, text, target_count, min_size):
+        """Split a large paragraph when paragraph-based chunking isn't sufficient"""
+        sentences = self._split_into_sentences(text)
+        if len(sentences) <= target_count:
+            return sentences
+        
+        chunks = []
+        current_chunk = []
+        current_words = 0
+        target_words = len(text.split()) // target_count
+        
+        for sentence in sentences:
+            sentence_words = len(sentence.split())
+            
+            if (current_words + sentence_words > target_words and
+                current_words >= min_size and
+                current_chunk and
+                len(chunks) < target_count - 1):
+                
+                chunks.append(' '.join(current_chunk))
+                current_chunk = [sentence]
+                current_words = sentence_words
+            else:
+                current_chunk.append(sentence)
+                current_words += sentence_words
+        
+        if current_chunk:
+            chunks.append(' '.join(current_chunk))
+        
+        return chunks
+    
+    def _split_into_sentences(self, text):
+        """Split text into sentences, preserving structure"""
+        import re
+        
+        # Split on sentence boundaries but keep the punctuation
+        sentences = re.split(r'([.!?]+\s+)', text)
+        
+        # Recombine sentences with their punctuation
+        result = []
+        for i in range(0, len(sentences) - 1, 2):
+            sentence = sentences[i]
+            if i + 1 < len(sentences):
+                sentence += sentences[i + 1]
+            if sentence.strip():
+                result.append(sentence.strip())
+        
+        return result if result else [text]
     
     def process_file_with_chunking(self, filepath):
         """Process a file and return list of chunks with metadata"""
@@ -957,11 +1364,15 @@ Created with ❤️ for audiobook enthusiasts""")
 
             word_count = self.count_words(clean_content)
 
-            if word_count <= 800:
-                return [(filename, content, f"{name_without_ext} ({word_count} words)")]
+            # Check if chunking is disabled or file is small enough
+            if not self.enable_chunking.get() or word_count <= 800:
+                if not self.enable_chunking.get() and word_count > 800:
+                    return [(filename, content, f"{name_without_ext} (Complete - {word_count} words)")]
+                else:
+                    return [(filename, content, f"{name_without_ext} ({word_count} words)")]
             else:
-                # Use the enhanced intelligent chunking from ProjectStateManager
-                chunks = self.state_manager.intelligent_chunk_text(clean_content)
+                # Use the user-configurable intelligent chunking
+                chunks = self.intelligent_chunk_text_with_settings(clean_content)
                 chunk_info = []
                 for i, chunk in enumerate(chunks):
                     chunk_words = self.count_words(chunk)
@@ -1034,7 +1445,10 @@ Created with ❤️ for audiobook enthusiasts""")
             self.log_message(f"🎯 Completed: {completed_count}/{total_chunks} chunks")
 
             if any(self.count_words(read_file_content(f)) > 800 for f in all_files):
-                self.log_message("📄 Large files automatically split into chunks")
+                if self.enable_chunking.get():
+                    self.log_message("📄 Large files automatically split into chunks")
+                else:
+                    self.log_message("📄 Large files will be processed as complete pieces (chunking disabled)")
         else:
             self.log_message(f"❌ Chapters folder not found: {chapters_dir}")
             self.file_chunks = {}
@@ -1296,15 +1710,35 @@ Created with ❤️ for audiobook enthusiasts""")
         display_name = self.chapter_listbox.get(selection[0])
         
         try:
-            # Get content from chunk data or fallback to file reading
-            if hasattr(self, 'file_chunks') and display_name in self.file_chunks:
-                content = self.file_chunks[display_name]['content']
-                title = f"Preview: {display_name}"
+            # Get content from chunk data
+            chunk_key = None
+            
+            # Find the correct chunk key by matching display names
+            for key in self.file_chunks:
+                if display_name.startswith("✅ "):
+                    clean_display = display_name[2:].strip()  # Remove ✅ prefix
+                else:
+                    clean_display = display_name
+                
+                # Match by base name (without word count part)
+                key_base = key.split(' (')[0] if ' (' in key else key
+                display_base = clean_display.split(' (')[0] if ' (' in clean_display else clean_display
+                
+                if key_base == display_base or clean_display == key:
+                    chunk_key = key
+                    break
+            
+            if chunk_key and chunk_key in self.file_chunks:
+                content = self.file_chunks[chunk_key]['content']
+                title = f"Preview: {chunk_key}"
             else:
-                # Fallback for old naming convention
-                filepath = os.path.join(self.chapters_path.get(), display_name)
-                content = read_file_content(filepath)
-                title = f"Preview: {display_name}"
+                # Fallback to first chunk if exact match not found
+                if self.file_chunks:
+                    first_key = list(self.file_chunks.keys())[0]
+                    content = self.file_chunks[first_key]['content']
+                    title = f"Preview: {first_key} (fallback)"
+                else:
+                    raise Exception("No chunk content available")
             
             # Create preview window
             preview_window = ctk.CTkToplevel(self.root)
@@ -1773,6 +2207,7 @@ Created with ❤️ for audiobook enthusiasts""")
         # Update environment
         os.environ['GOOGLE_API_KEY'] = self.api_key.get().strip()
         os.environ['NARRATOR_VOICE'] = self.narrator_voice.get()
+        os.environ['TTS_MODEL'] = self.tts_model.get()
 
         # Get custom prompt
         custom_prompt = self.prompt_textbox.get("1.0", "end-1c").strip()
@@ -1962,6 +2397,11 @@ Created with ❤️ for audiobook enthusiasts""")
             # Update progress indicator
             self.progress_indicator.configure(text="🎉 Generation complete!")
 
+        except QuotaExhaustedError as e:
+            self.log_message(f"🚦 Quota Exhausted: {str(e)}")
+            self.log_message("⏳ API quota limits reached. Consider waiting or upgrading your API plan.")
+            messagebox.showerror("Quota Exhausted",
+                                f"API quota limits have been reached.\n\nPlease wait a few minutes before trying again, or consider upgrading your Google AI API plan.\n\nDetails: {str(e)}")
         except ServiceUnavailableError as e:
             self.log_message(f"🚫 Service Unavailable: {str(e)}")
             self.log_message("❌ Google AI service is currently unavailable. Please try again later.")
@@ -1985,7 +2425,7 @@ Created with ❤️ for audiobook enthusiasts""")
             self.progress_indicator.configure(text="📊 Ready to generate")
             
     def generate_chapter_with_custom_prompt(self, chapter_text, system_instructions, output_file, custom_prompt):
-        """Generate audio with custom prompt and retry logic"""
+        """Generate audio with custom prompt using REST TTS API with proper style guidance"""
         from google import genai
         from google.genai import types
         import wave
@@ -1999,26 +2439,32 @@ Created with ❤️ for audiobook enthusiasts""")
 
         client = genai.Client(api_key=os.environ['GOOGLE_API_KEY'])
 
-        prompt = f"""{custom_prompt}
+        # Prepend the user's exact custom prompt as a style paragraph before the content
+        # This allows the user full control over the style instruction
+        if custom_prompt and custom_prompt.strip():
+            # Use the user's exact prompt text as a style instruction
+            tts_prompt = f"{custom_prompt.strip()}: {chapter_text}"
+        else:
+            # Default fallback if no custom prompt provided
+            tts_prompt = f"Narrate this audiobook chapter in a professional, engaging style: {chapter_text}"
 
-{system_instructions}
-
-Please narrate the following chapter:
-
-{chapter_text}"""
-
-        # Define a logging callback for retry messages
-        def log_callback(message):
-            self.log_message(f"🔄 {message}")
+        # Define a progress callback for quota management and rate limiting
+        def progress_callback(message):
+            self.log_message(f"🎤 {message}")
+            # Update progress indicator for long waits
+            if "Waiting" in message or "Rate limited" in message:
+                self.progress_indicator.configure(text=f"⏳ {message}")
+            self.root.update_idletasks()
 
         try:
-            # Generate audio with retry logic
-            data = generate_audio_with_retry(
+            # Generate audio with quota-aware rate limiting using selected TTS model
+            data = generate_audio_with_quota_awareness(
                 client=client,
-                prompt=prompt,
+                prompt=tts_prompt,
                 voice_name=self.narrator_voice.get(),
+                model=self.tts_model.get(),  # Use selected TTS model
                 max_retries=3,
-                log_callback=log_callback
+                progress_callback=progress_callback
             )
 
             # Handle file collisions
@@ -2028,6 +2474,11 @@ Please narrate the following chapter:
             # Return the actual file used
             return final_output_file
 
+        except QuotaExhaustedError as e:
+            error_msg = f"🚦 Quota exhausted: {str(e)}"
+            self.log_message(error_msg)
+            self.log_message("⏳ API quota limits reached. Please wait before continuing or try again later.")
+            raise
         except ServiceUnavailableError as e:
             error_msg = f"🚫 Service unavailable: {str(e)}"
             self.log_message(error_msg)
