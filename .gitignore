@@ -1,33 +1,78 @@
 __pycache__/
 *.pyc
+
+# Environment and API Keys - NEVER COMMIT THESE!
 .env
+.env.*
+.envrc
+*.key
+*.pem
+*.p12
+*.pfx
+api_keys.txt
+secrets.txt
+credentials.json
+config.json
+*.config
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+virtualenv/
+.virtualenv/
+pipenv/
+poetry.lock
 
 # Build artifacts
 build/
 dist/
 *.spec
+*.egg-info/
 
 # Generated audio files
 *.wav
 *.mp3
 *.m4a
 *.flac
+*.aac
+*.ogg
 
 # Output directories
 output/
 temp/
+logs/
+cache/
 
 # Test files
 complete_audiobook.*
 final_podcast.*
 book_content.txt
+test_output/
+*.test.*
 
 # IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
+.sublime-*
+*.code-workspace
 
 # OS files
 .DS_Store
 Thumbs.db
+*.tmp
+*.log
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+*~
