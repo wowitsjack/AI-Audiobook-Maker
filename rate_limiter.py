@@ -167,28 +167,42 @@ class QuotaAwareRetryHandler:
         return total_delay
     
     def call_with_quota_awareness(self, func: Callable, model: str, prompt: str,
-                                 progress_callback: Optional[Callable] = None, 
+                                 progress_callback: Optional[Callable] = None,
                                  *args, **kwargs) -> Any:
         """Execute function with quota awareness and intelligent retry"""
         estimated_tokens = self.rate_limiter.estimate_tokens(prompt)
         
+        print(f"🔍 DEBUG: Quota aware call starting...")
+        print(f"🔍 DEBUG: Model: {model}")
+        print(f"🔍 DEBUG: Estimated tokens: {estimated_tokens}")
+        print(f"🔍 DEBUG: Max retries: {self.max_retries}")
+        
         # Wait for rate limit if needed
+        print(f"🔍 DEBUG: Checking rate limits...")
         self.rate_limiter.wait_for_rate_limit(model, estimated_tokens, progress_callback)
+        print(f"🔍 DEBUG: Rate limit check passed")
         
         last_error = None
         
         for attempt in range(self.max_retries + 1):
+            print(f"🔍 DEBUG: === ATTEMPT {attempt + 1}/{self.max_retries + 1} ===")
             try:
                 if progress_callback:
                     progress_callback(f"🎤 Making API call (attempt {attempt + 1})...")
                 
+                print(f"🔍 DEBUG: Executing function: {func.__name__ if hasattr(func, '__name__') else 'anonymous'}")
                 result = func(*args, **kwargs)
+                print(f"🔍 DEBUG: Function executed successfully")
                 
                 # Record successful request
+                print(f"🔍 DEBUG: Recording successful request...")
                 self.rate_limiter.record_request(model, estimated_tokens)
                 
                 if attempt > 0:
                     logger.info(f"✅ API call succeeded after {attempt} retries")
+                    print(f"🔍 DEBUG: Success after {attempt} retries")
+                else:
+                    print(f"🔍 DEBUG: Success on first attempt")
                 
                 return result
                 
@@ -196,28 +210,41 @@ class QuotaAwareRetryHandler:
                 last_error = e
                 error_str = str(e)
                 
+                print(f"🔍 DEBUG: Exception caught on attempt {attempt + 1}")
+                print(f"🔍 DEBUG: Exception type: {type(e).__name__}")
+                print(f"🔍 DEBUG: Exception message: {error_str}")
+                print(f"🔍 DEBUG: Has response attribute: {hasattr(e, 'response')}")
+                
                 # Handle different error types
                 if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
                     status_code = e.response.status_code
+                    print(f"🔍 DEBUG: HTTP status code: {status_code}")
+                    print(f"🔍 DEBUG: Response headers: {getattr(e.response, 'headers', 'N/A')}")
                     
                     if status_code == 429:  # Rate limit exceeded
+                        print(f"🔍 DEBUG: Rate limit exceeded (429)")
                         if attempt < self.max_retries:
                             delay = self.handle_429_error(error_str, attempt)
+                            print(f"🔍 DEBUG: Waiting {delay:.1f}s for rate limit...")
                             if progress_callback:
                                 progress_callback(f"⏳ Rate limited. Waiting {delay:.0f}s...")
                             time.sleep(delay)
                             continue
                         else:
                             logger.error(f"❌ Rate limit retries exhausted after {self.max_retries} attempts")
+                            print(f"🔍 DEBUG: Rate limit retries exhausted")
                             raise QuotaExhaustedError(f"Rate limit exceeded after {self.max_retries} retries")
                     
                     elif status_code == 503:  # Service unavailable
+                        print(f"🔍 DEBUG: Service unavailable (503)")
                         logger.error("🚫 Service unavailable (503). Cannot continue.")
                         raise ServiceUnavailableError("Google AI service is currently unavailable")
                     
                     elif status_code in [500, 502]:  # Server errors
+                        print(f"🔍 DEBUG: Server error ({status_code})")
                         if attempt < self.max_retries:
                             delay = self.exponential_backoff(attempt)
+                            print(f"🔍 DEBUG: Retrying after server error in {delay:.1f}s...")
                             logger.warning(f"🔄 Server error ({status_code}). Retrying in {delay:.1f}s...")
                             if progress_callback:
                                 progress_callback(f"🔄 Server error. Retrying in {delay:.0f}s...")
@@ -225,24 +252,29 @@ class QuotaAwareRetryHandler:
                             continue
                         else:
                             logger.error(f"❌ Server error retries exhausted")
+                            print(f"🔍 DEBUG: Server error retries exhausted")
                             raise MaxRetriesExceededError(f"Server errors after {self.max_retries} retries")
                     
                     else:
                         # Other HTTP errors
+                        print(f"🔍 DEBUG: Other HTTP error: {status_code}")
                         logger.error(f"❌ HTTP {status_code} error: {error_str}")
                         raise HTTPAPIError(f"API call failed with HTTP {status_code}: {error_str}")
                 
                 # Handle other errors
                 else:
+                    print(f"🔍 DEBUG: Non-HTTP error")
                     logger.error(f"❌ Unexpected error: {error_str}")
                     if attempt < self.max_retries:
                         delay = self.exponential_backoff(attempt)
+                        print(f"🔍 DEBUG: Retrying in {delay:.1f}s...")
                         logger.warning(f"🔄 Retrying in {delay:.1f}s...")
                         if progress_callback:
                             progress_callback(f"🔄 Retrying in {delay:.0f}s...")
                         time.sleep(delay)
                         continue
                     else:
+                        print(f"🔍 DEBUG: All retries exhausted")
                         raise
         
         # If we get here, all retries failed
@@ -272,34 +304,80 @@ def generate_audio_with_quota_awareness(client, prompt: str, voice_name: str,
                                        max_retries: int = 3,
                                        progress_callback: Optional[Callable] = None) -> bytes:
     """Generate audio with intelligent quota management"""
+    
+    # Enhanced debugging for network/API calls
+    print(f"🔍 DEBUG: === STARTING API CALL ===")
+    print(f"🔍 DEBUG: Model: {model}")
+    print(f"🔍 DEBUG: Voice: {voice_name}")
+    print(f"🔍 DEBUG: Prompt length: {len(prompt)} characters")
+    print(f"🔍 DEBUG: Max retries: {max_retries}")
+    print(f"🔍 DEBUG: Client type: {type(client).__name__}")
+    
     retry_handler = QuotaAwareRetryHandler(max_retries=max_retries)
+    estimated_tokens = retry_handler.rate_limiter.estimate_tokens(prompt)
+    print(f"🔍 DEBUG: Estimated tokens: {estimated_tokens}")
 
     def _generate_audio():
         from google.genai import types
+        
+        print(f"🔍 DEBUG: Preparing API request configuration...")
+        print(f"🔍 DEBUG: Response modalities: ['AUDIO']")
+        print(f"🔍 DEBUG: Voice config: {voice_name}")
 
         # Use REST API for TTS generation
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=voice_name,
+        print(f"🔍 DEBUG: Making API call to {model}...")
+        start_time = time.time()
+        
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                voice_name=voice_name,
+                            )
                         )
                     )
                 )
             )
-        )
+            
+            api_duration = time.time() - start_time
+            print(f"🔍 DEBUG: API call completed in {api_duration:.2f} seconds")
+            print(f"🔍 DEBUG: Response type: {type(response).__name__}")
+            print(f"🔍 DEBUG: Response has {len(response.candidates)} candidates")
+            
+            # Extract audio data
+            print(f"🔍 DEBUG: Extracting audio data from response...")
+            audio_data = response.candidates[0].content.parts[0].inline_data.data
+            print(f"🔍 DEBUG: Audio data extracted: {len(audio_data)} bytes")
+            print(f"🔍 DEBUG: Audio data type: {type(audio_data).__name__}")
+            print(f"🔍 DEBUG: === API CALL SUCCESSFUL ===")
+            
+            return audio_data
+            
+        except Exception as e:
+            api_duration = time.time() - start_time
+            print(f"🔍 DEBUG: API call failed after {api_duration:.2f} seconds")
+            print(f"🔍 DEBUG: Exception type: {type(e).__name__}")
+            print(f"🔍 DEBUG: Exception message: {str(e)}")
+            if hasattr(e, 'response'):
+                print(f"🔍 DEBUG: Response object present: {hasattr(e, 'response')}")
+                if hasattr(e.response, 'status_code'):
+                    print(f"🔍 DEBUG: HTTP status code: {e.response.status_code}")
+                if hasattr(e.response, 'text'):
+                    print(f"🔍 DEBUG: Response text: {e.response.text[:500]}...")
+            print(f"🔍 DEBUG: === API CALL FAILED ===")
+            raise
 
-        # Extract audio data
-        audio_data = response.candidates[0].content.parts[0].inline_data.data
-        return audio_data
-
-    return retry_handler.call_with_quota_awareness(
+    print(f"🔍 DEBUG: Calling with quota awareness...")
+    result = retry_handler.call_with_quota_awareness(
         _generate_audio,
         model,
         prompt,
         progress_callback
     )
+    print(f"🔍 DEBUG: === QUOTA AWARE CALL COMPLETED ===")
+    return result

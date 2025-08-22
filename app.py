@@ -236,15 +236,38 @@ def reduce_chunk_limit():
         return True
     return False
 
-def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-preview-tts", custom_prompt=None):
+def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-preview-tts", custom_prompt=None, safe_chunk_mode=False):
     """Generate TTS audio for a single text chunk using REST API with proper TTS prompting."""
     global CURRENT_CHUNK_LIMIT
     
-    # Check if chunk exceeds current limit due to adaptive reduction
-    if count_tokens(chunk_text) > CURRENT_CHUNK_LIMIT:
-        print(f"⚠️ Chunk ({count_tokens(chunk_text):,} tokens) exceeds current limit ({CURRENT_CHUNK_LIMIT:,}), re-chunking...")
-        # Re-chunk with current limit
-        sub_chunks = chunk_text_smartly(chunk_text, CURRENT_CHUNK_LIMIT)
+    # Enhanced debugging output
+    print(f"🔍 DEBUG: Starting chunk audio generation")
+    print(f"🔍 DEBUG: Model: {model}")
+    print(f"🔍 DEBUG: Output file: {chunk_output_file}")
+    print(f"🔍 DEBUG: Safe chunk mode: {safe_chunk_mode}")
+    print(f"🔍 DEBUG: Custom prompt provided: {bool(custom_prompt and custom_prompt.strip())}")
+    print(f"🔍 DEBUG: Chunk length: {len(chunk_text)} characters")
+    print(f"🔍 DEBUG: Chunk tokens: {count_tokens(chunk_text):,}")
+    print(f"🔍 DEBUG: API Key present: {'***' + GOOGLE_API_KEY[-4:] if GOOGLE_API_KEY and len(GOOGLE_API_KEY) > 4 else 'Yes' if GOOGLE_API_KEY else 'No'}")
+    print(f"🔍 DEBUG: Narrator voice: {NARRATOR_VOICE}")
+    
+    # Determine effective chunk limit based on safe mode
+    effective_limit = CURRENT_CHUNK_LIMIT
+    if safe_chunk_mode:
+        # Use 1800 token limit for all models in safe mode
+        effective_limit = min(CURRENT_CHUNK_LIMIT, 1800)
+        print(f"🛡️ Safe chunk mode active: Using {effective_limit:,} token limit for optimal performance")
+        print(f"🔍 DEBUG: Effective limit reduced from {CURRENT_CHUNK_LIMIT:,} to {effective_limit:,}")
+    else:
+        print(f"🔍 DEBUG: Using standard limit: {effective_limit:,} tokens")
+    
+    # Check if chunk exceeds effective limit
+    if count_tokens(chunk_text) > effective_limit:
+        print(f"⚠️ Chunk ({count_tokens(chunk_text):,} tokens) exceeds effective limit ({effective_limit:,}), re-chunking...")
+        print(f"🔍 DEBUG: Initiating smart re-chunking with limit {effective_limit:,}")
+        # Re-chunk with effective limit
+        sub_chunks = chunk_text_smartly(chunk_text, effective_limit)
+        print(f"🔍 DEBUG: Split into {len(sub_chunks)} sub-chunks")
         
         # Generate audio for each sub-chunk and combine
         sub_chunk_files = []
@@ -252,10 +275,12 @@ def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-
         
         for i, sub_chunk in enumerate(sub_chunks, 1):
             sub_output = f"{base_name}_sub_{i:02d}.wav"
-            sub_file = generate_chunk_audio(sub_chunk, sub_output, model, custom_prompt)  # Recursive call
+            print(f"🔍 DEBUG: Processing sub-chunk {i}/{len(sub_chunks)}: {count_tokens(sub_chunk):,} tokens")
+            sub_file = generate_chunk_audio(sub_chunk, sub_output, model, custom_prompt, safe_chunk_mode)  # Recursive call
             sub_chunk_files.append(sub_file)
         
         # Combine sub-chunks
+        print(f"🔍 DEBUG: Combining {len(sub_chunk_files)} sub-chunks into final output")
         return combine_audio_chunks(sub_chunk_files, chunk_output_file)
 
     # Import rate limiter
@@ -265,17 +290,27 @@ def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-
     if custom_prompt and custom_prompt.strip():
         # Use the user's exact prompt text as a style instruction
         tts_prompt = f"{custom_prompt.strip()}: {chunk_text}"
+        print(f"🔍 DEBUG: Applied custom prompt: '{custom_prompt[:50]}...'")
     else:
         # Default fallback if no custom prompt provided
         tts_prompt = f"Narrate this audiobook chapter in a professional, engaging style: {chunk_text}"
+        print(f"🔍 DEBUG: Using default prompt format")
+    
+    print(f"🔍 DEBUG: Final TTS prompt length: {len(tts_prompt)} characters, {count_tokens(tts_prompt):,} tokens")
 
     # Define a progress callback
     def progress_callback(message):
         print(f"🎤 {message}")
+        print(f"🔍 DEBUG: Progress update: {message}")
 
     try:
+        print(f"🔍 DEBUG: Initializing Gemini client...")
         # Initialize Gemini client
         client = genai.Client(api_key=GOOGLE_API_KEY)
+        print(f"🔍 DEBUG: Client initialized successfully")
+        
+        print(f"🔍 DEBUG: Calling generate_audio_with_quota_awareness...")
+        print(f"🔍 DEBUG: Voice: {NARRATOR_VOICE}, Model: {model}")
         
         # Generate audio using REST API with proper TTS prompting
         audio_data = generate_audio_with_quota_awareness(
@@ -287,23 +322,34 @@ def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-
             progress_callback=progress_callback
         )
 
+        print(f"🔍 DEBUG: Audio generation completed, received {len(audio_data)} bytes")
+        
         # Save audio to file
+        print(f"🔍 DEBUG: Saving audio to file: {chunk_output_file}")
         wave_file(chunk_output_file, audio_data)
         print(f"Chunk audio saved to {chunk_output_file}")
+        print(f"🔍 DEBUG: File save completed successfully")
         return chunk_output_file
 
     except Exception as e:
         error_str = str(e)
+        print(f"🔍 DEBUG: Exception caught: {type(e).__name__}")
+        print(f"🔍 DEBUG: Exception message: {error_str}")
         
         # Handle server errors with adaptive chunking
         if "500" in error_str or "502" in error_str or "timeout" in error_str.lower():
             print(f"🔧 Server error detected: {error_str}")
+            print(f"🔍 DEBUG: Attempting to reduce chunk limit and retry")
             if reduce_chunk_limit():
                 print(f"🔄 Retrying with smaller chunks...")
-                return generate_chunk_audio(chunk_text, chunk_output_file, model, custom_prompt)  # Retry with new limit
+                print(f"🔍 DEBUG: Chunk limit reduced, retrying generation")
+                return generate_chunk_audio(chunk_text, chunk_output_file, model, custom_prompt, safe_chunk_mode)  # Retry with new limit
+            else:
+                print(f"🔍 DEBUG: Cannot reduce chunk limit further")
         
         # Re-raise if not a server error or can't reduce further
         print(f"❌ API Error: {error_str}")
+        print(f"🔍 DEBUG: Re-raising exception: {type(e).__name__}")
         raise
 
 def combine_audio_chunks(chunk_files, output_file):
@@ -345,21 +391,28 @@ def combine_audio_chunks(chunk_files, output_file):
     
     return final_output_file
 
-def generate_chapter_audio(chapter_text, output_file, model="gemini-2.5-flash-preview-tts", custom_prompt=None):
+def generate_chapter_audio(chapter_text, output_file, model="gemini-2.5-flash-preview-tts", custom_prompt=None, safe_chunk_mode=False):
     """Generate TTS audio for a chapter, automatically chunking if needed."""
     global CURRENT_CHUNK_LIMIT
+    
+    # Determine effective chunk limit based on safe mode
+    effective_limit = CURRENT_CHUNK_LIMIT
+    if safe_chunk_mode:
+        # Use 1800 token limit for all models in safe mode
+        effective_limit = min(CURRENT_CHUNK_LIMIT, 1800)
+        print(f"🛡️ Safe chunk mode active: Using {effective_limit:,} token limit for optimal performance")
     
     # Check if chapter needs to be chunked
     token_count = count_tokens(chapter_text)
     
-    if token_count <= CURRENT_CHUNK_LIMIT:
+    if token_count <= effective_limit:
         # Small enough for single request
-        print(f"Chapter size: {token_count:,} tokens - processing as single chunk (limit: {CURRENT_CHUNK_LIMIT:,})")
-        return generate_chunk_audio(chapter_text, output_file, model, custom_prompt)
+        print(f"Chapter size: {token_count:,} tokens - processing as single chunk (limit: {effective_limit:,})")
+        return generate_chunk_audio(chapter_text, output_file, model, custom_prompt, safe_chunk_mode)
     
     # Chapter is too large, needs chunking
-    print(f"Chapter size: {token_count:,} tokens - splitting into chunks (limit: {CURRENT_CHUNK_LIMIT:,})...")
-    chunks = chunk_text_smartly(chapter_text, max_tokens=CURRENT_CHUNK_LIMIT)
+    print(f"Chapter size: {token_count:,} tokens - splitting into chunks (limit: {effective_limit:,})...")
+    chunks = chunk_text_smartly(chapter_text, max_tokens=effective_limit)
     print(f"Split into {len(chunks)} chunks")
     
     # Process chunks with smart resume capability
@@ -376,7 +429,7 @@ def generate_chapter_audio(chapter_text, output_file, model="gemini-2.5-flash-pr
         chunk_output = f"{base_name}_chunk_{chunk_file_counter:03d}.wav"
         
         try:
-            chunk_file = generate_chunk_audio(chunk, chunk_output, model, custom_prompt)
+            chunk_file = generate_chunk_audio(chunk, chunk_output, model, custom_prompt, safe_chunk_mode)
             chunk_files.append(chunk_file)
             chunk_index += 1  # Success - move to next chunk
             chunk_file_counter += 1  # Increment file counter
@@ -387,8 +440,13 @@ def generate_chapter_audio(chapter_text, output_file, model="gemini-2.5-flash-pr
                 if reduce_chunk_limit():
                     print(f"🔧 Server error on chunk {chunk_index+1}, reducing limit to {CURRENT_CHUNK_LIMIT:,} tokens")
                     
+                    # Update effective limit after reduction
+                    new_effective_limit = CURRENT_CHUNK_LIMIT
+                    if safe_chunk_mode:
+                        new_effective_limit = min(CURRENT_CHUNK_LIMIT, 1800)
+                    
                     # Split the failing chunk with new smaller limit
-                    sub_chunks = chunk_text_smartly(chunk, max_tokens=CURRENT_CHUNK_LIMIT)
+                    sub_chunks = chunk_text_smartly(chunk, max_tokens=new_effective_limit)
                     print(f"📦 Split failing chunk into {len(sub_chunks)} sub-chunks")
                     
                     # Replace the failing chunk with sub-chunks in the list

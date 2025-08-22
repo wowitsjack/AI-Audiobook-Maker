@@ -43,7 +43,7 @@ except:
 class AudiobookGeneratorGUI:
     def __init__(self):
         self.root = ctk.CTk()
-        self.root.title("🎧 AI Audiobook Generator")
+        self.root.title("🎧 wowitsjack's Audiobook Maker")
         
         # Set up working directory and initialize paths
         self.setup_working_directory()
@@ -86,6 +86,7 @@ class AudiobookGeneratorGUI:
         self.target_chunk_count = tk.IntVar(value=3)      # Target number of chunks
         self.chunk_overlap = tk.IntVar(value=50)          # Overlap between chunks
         self.min_chunk_size = tk.IntVar(value=200)        # Minimum chunk size
+        self.safe_chunk_mode = tk.BooleanVar(value=True)  # Safe chunk mode for Flash model
         
         # Terminal variables
         self.terminal_visible = False
@@ -167,6 +168,8 @@ class AudiobookGeneratorGUI:
                     self.chunk_overlap.set(settings['chunk_overlap'])
                 if 'min_chunk_size' in settings:
                     self.min_chunk_size.set(settings['min_chunk_size'])
+                if 'safe_chunk_mode' in settings:
+                    self.safe_chunk_mode.set(settings['safe_chunk_mode'])
                 
                 # Load last used chapters folder
                 if 'last_chapters_folder' in settings:
@@ -198,6 +201,7 @@ class AudiobookGeneratorGUI:
                 'target_chunk_count': self.target_chunk_count.get(),
                 'chunk_overlap': self.chunk_overlap.get(),
                 'min_chunk_size': self.min_chunk_size.get(),
+                'safe_chunk_mode': self.safe_chunk_mode.get(),
                 'last_chapters_folder': self.chapters_path.get(),
                 'tts_model': self.tts_model.get(),
                 'saved_prompts': getattr(self, 'saved_prompts', [])
@@ -298,7 +302,7 @@ Created with ❤️ for audiobook enthusiasts""")
 
         title_label = ctk.CTkLabel(
             title_frame,
-            text="🎧 AI Audiobook Generator 🚀",
+            text="🎧 wowitsjack's Audiobook Maker 🚀",
             font=ctk.CTkFont(size=36, weight="bold", family="Segoe UI")
         )
         title_label.grid(row=0, column=0, sticky="ew")
@@ -409,14 +413,27 @@ Created with ❤️ for audiobook enthusiasts""")
         )
         
         # Enable/disable chunking
+        chunking_options_frame = ctk.CTkFrame(chunking_header, fg_color="transparent")
+        chunking_options_frame.grid(row=0, column=1, sticky="e", padx=(10, 0))
+        
         self.chunking_checkbox = ctk.CTkCheckBox(
-            chunking_header,
+            chunking_options_frame,
             text="Enable Smart Chunking",
             variable=self.enable_chunking,
             font=ctk.CTkFont(size=12),
             command=self.on_chunking_toggle
         )
-        self.chunking_checkbox.grid(row=0, column=1, sticky="e", padx=(10, 0))
+        self.chunking_checkbox.grid(row=0, column=0, sticky="e", padx=(0, 10))
+        
+        # Safe chunk mode checkbox
+        self.safe_chunk_checkbox = ctk.CTkCheckBox(
+            chunking_options_frame,
+            text="Safe Mode (1800 tokens)",
+            variable=self.safe_chunk_mode,
+            font=ctk.CTkFont(size=11),
+            command=self.on_safe_chunk_toggle
+        )
+        self.safe_chunk_checkbox.grid(row=0, column=1, sticky="e")
         
         # Chunking controls frame
         self.chunking_controls = ctk.CTkFrame(chunking_main_frame, fg_color="transparent")
@@ -543,7 +560,16 @@ Created with ❤️ for audiobook enthusiasts""")
             font=ctk.CTkFont(size=10),
             text_color=("gray60", "gray40")
         )
-        self.chunking_info.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.chunking_info.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
+        
+        # Safe chunk mode info
+        self.safe_chunk_info = ctk.CTkLabel(
+            chunking_main_frame,
+            text="🛡️ Safe Mode: Limits chunks to 1800 tokens for all models - ensures optimal performance and reliability",
+            font=ctk.CTkFont(size=10),
+            text_color=("blue", "lightblue")
+        )
+        self.safe_chunk_info.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
         
         # Resume point selection
         resume_frame = ctk.CTkFrame(left_frame)
@@ -973,6 +999,9 @@ Created with ❤️ for audiobook enthusiasts""")
         # Initialize chunking controls visibility
         self.on_chunking_toggle()
         
+        # Initialize safe chunk mode visibility
+        self.on_safe_chunk_toggle()
+        
         # Initialize
         self.refresh_chapters()
         self.log_message("🎧 AI Audiobook Generator ready!")
@@ -1150,21 +1179,68 @@ Created with ❤️ for audiobook enthusiasts""")
     def on_chunking_toggle(self):
         """Handle chunking toggle changes"""
         if self.enable_chunking.get():
-            # Show chunking controls
+            # Show chunking controls but disable manual sliders for automatic chunking
             self.chunking_controls.grid()
+            
+            # Disable and grey out manual sliders when smart chunking is enabled
+            self.threshold_slider.configure(state="disabled", fg_color="gray60", progress_color="gray40")
+            self.target_slider.configure(state="disabled", fg_color="gray60", progress_color="gray40")
+            self.overlap_slider.configure(state="disabled", fg_color="gray60", progress_color="gray40")
+            self.min_size_slider.configure(state="disabled", fg_color="gray60", progress_color="gray40")
+            
+            # Also grey out the labels to show they're disabled
+            self.threshold_label.configure(text_color="gray60")
+            self.target_label.configure(text_color="gray60")
+            self.overlap_label.configure(text_color="gray60")
+            self.min_size_label.configure(text_color="gray60")
+            
             threshold = self.chunk_word_threshold.get()
-            self.chunking_info.configure(text=f"💡 Files >{threshold} words are automatically split using these settings")
-            self.log_message("🔧 Smart Chunking enabled - large files will be split into smaller parts")
+            self.chunking_info.configure(text=f"💡 Smart Chunking enabled - automatic intelligent splitting (manual controls disabled)")
+            self.log_message("🔧 Smart Chunking enabled - automatic intelligent splitting with manual controls disabled")
+            self.log_message("🎛️ DEBUG: Manual sliders disabled and greyed out for smart chunking mode")
         else:
             # Hide chunking controls
             self.chunking_controls.grid_remove()
+            
+            # Re-enable and restore colors for manual sliders when smart chunking is disabled
+            self.threshold_slider.configure(state="normal", fg_color=("gray78", "gray23"), progress_color=("gray81", "gray19"))
+            self.target_slider.configure(state="normal", fg_color=("gray78", "gray23"), progress_color=("gray81", "gray19"))
+            self.overlap_slider.configure(state="normal", fg_color=("gray78", "gray23"), progress_color=("gray81", "gray19"))
+            self.min_size_slider.configure(state="normal", fg_color=("gray78", "gray23"), progress_color=("gray81", "gray19"))
+            
+            # Restore label colors
+            self.threshold_label.configure(text_color=("gray10", "gray90"))
+            self.target_label.configure(text_color=("gray10", "gray90"))
+            self.overlap_label.configure(text_color=("gray10", "gray90"))
+            self.min_size_label.configure(text_color=("gray10", "gray90"))
+            
             self.chunking_info.configure(text="⚠️ Chunking disabled - all files processed as single pieces")
             self.log_message("🔧 Smart Chunking disabled - files will be processed as complete pieces")
+            self.log_message("🎛️ DEBUG: Manual sliders re-enabled and colors restored")
         
         # Save settings immediately
         self.save_settings()
         
         # Refresh chapters to reflect chunking changes
+        self.refresh_chapters()
+    
+    def on_safe_chunk_toggle(self):
+        """Handle safe chunk mode toggle changes"""
+        if self.safe_chunk_mode.get():
+            self.log_message("🛡️ Safe Chunk Mode enabled - chunks limited to 1800 tokens (~1350 words)")
+            self.safe_chunk_info.configure(
+                text="🛡️ Safe Mode: Active - chunks limited to 1800 tokens (~1350 words) for optimal performance"
+            )
+        else:
+            self.log_message("🛡️ Safe Chunk Mode disabled - using standard token limits")
+            self.safe_chunk_info.configure(
+                text="🛡️ Safe Mode: Inactive - using standard token limits for all models"
+            )
+        
+        # Save settings immediately
+        self.save_settings()
+        
+        # Refresh chapters to reflect safe mode changes
         self.refresh_chapters()
     
     def on_chunking_setting_change(self, value):
@@ -1205,10 +1281,16 @@ Created with ❤️ for audiobook enthusiasts""")
         return len(text.split())
     
     def intelligent_chunk_text_with_settings(self, text):
-        """Intelligent text chunking with user-defined settings, respecting paragraphs"""
+        """Intelligent text chunking with user-defined settings, respecting paragraphs and safe mode"""
         target_count = self.target_chunk_count.get()
         overlap_words = self.chunk_overlap.get()
         min_size = self.min_chunk_size.get()
+        
+        # Apply safe mode limits if enabled
+        if self.safe_chunk_mode.get():
+            # Convert 1800 tokens to approximate words (tokens * 0.75)
+            safe_word_limit = int(1800 * 0.75)  # ~1350 words
+            min_size = min(min_size, safe_word_limit)
         
         # Split text into paragraphs, preserving empty lines
         paragraphs = text.split('\n\n')
@@ -1231,29 +1313,40 @@ Created with ❤️ for audiobook enthusiasts""")
         if total_words <= min_size or target_count <= 1:
             return [text]
         
-        # Calculate target words per chunk
+        # Calculate target words per chunk, considering safe mode
         target_words_per_chunk = max(min_size, total_words // target_count)
+        if self.safe_chunk_mode.get():
+            safe_word_limit = int(1800 * 0.75)  # ~1350 words
+            target_words_per_chunk = min(target_words_per_chunk, safe_word_limit)
         
         chunks = []
         current_chunk_text = []
         current_word_count = 0
         chunks_created = 0
         
+        # In safe mode, we ignore target count and create as many chunks as needed
+        use_target_limit = not self.safe_chunk_mode.get()
+        
         i = 0
-        while i < len(paragraph_info) and chunks_created < target_count:
+        while i < len(paragraph_info):
             para_info = paragraph_info[i]
             para_text = para_info['text']
             para_words = para_info['words']
             
-            # For the last chunk, include all remaining paragraphs
-            if chunks_created == target_count - 1:
-                # Add all remaining paragraphs to final chunk
-                remaining_paras = [p['text'] for p in paragraph_info[i:]]
-                current_chunk_text.extend(remaining_paras)
+            # For the last chunk when using target count (not in safe mode), include remaining paragraphs
+            if (use_target_limit and chunks_created == target_count - 1 and
+                i == len(paragraph_info) - 1):
+                # Add final paragraph to complete the target count
+                current_chunk_text.append(para_text)
+                current_word_count += para_words
                 break
             
-            # Check if adding this paragraph would exceed target
-            if (current_word_count + para_words > target_words_per_chunk and
+            # Check if adding this paragraph would exceed limits
+            would_exceed_target = current_word_count + para_words > target_words_per_chunk
+            would_exceed_safe = (self.safe_chunk_mode.get() and
+                               current_word_count + para_words > int(1800 * 0.75))
+            
+            if ((would_exceed_target or would_exceed_safe) and
                 current_word_count >= min_size and
                 current_chunk_text):
                 
@@ -1279,6 +1372,13 @@ Created with ❤️ for audiobook enthusiasts""")
                 else:
                     current_chunk_text = []
                     current_word_count = 0
+                
+                # Check if we've reached target count limit (only when not in safe mode)
+                if use_target_limit and chunks_created >= target_count:
+                    # Force remaining content into final chunk
+                    remaining_paras = [p['text'] for p in paragraph_info[i:]]
+                    current_chunk_text.extend(remaining_paras)
+                    break
             
             # Add current paragraph to chunk
             current_chunk_text.append(para_text)
@@ -1363,15 +1463,22 @@ Created with ❤️ for audiobook enthusiasts""")
                 clean_content = re.sub(r'`(.*?)`', r'\1', clean_content)  # Remove code
 
             word_count = self.count_words(clean_content)
+            
+            # Determine chunking threshold based on safe mode
+            threshold = self.chunk_word_threshold.get()
+            if self.safe_chunk_mode.get():
+                # Convert 1800 tokens to approximate words (tokens * 0.75)
+                safe_word_limit = int(1800 * 0.75)  # ~1350 words
+                threshold = min(threshold, safe_word_limit)
 
             # Check if chunking is disabled or file is small enough
-            if not self.enable_chunking.get() or word_count <= 800:
-                if not self.enable_chunking.get() and word_count > 800:
+            if not self.enable_chunking.get() or word_count <= threshold:
+                if not self.enable_chunking.get() and word_count > threshold:
                     return [(filename, content, f"{name_without_ext} (Complete - {word_count} words)")]
                 else:
                     return [(filename, content, f"{name_without_ext} ({word_count} words)")]
             else:
-                # Use the user-configurable intelligent chunking
+                # Use the user-configurable intelligent chunking with safe mode consideration
                 chunks = self.intelligent_chunk_text_with_settings(clean_content)
                 chunk_info = []
                 for i, chunk in enumerate(chunks):
@@ -2180,6 +2287,9 @@ Created with ❤️ for audiobook enthusiasts""")
             
     def log_message(self, message):
         """Add message to status log with visual flair"""
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        
         # Add some emoji and color enhancements
         if "✅" in message or "Completed" in message:
             message = f"🟢 {message}"
@@ -2189,9 +2299,18 @@ Created with ❤️ for audiobook enthusiasts""")
             message = f"🔵 {message}"
         elif "🎧" in message or "Starting" in message:
             message = f"🟡 {message}"
+        elif "DEBUG" in message or "API" in message or "Network" in message:
+            message = f"🔍 {message}"
 
-        self.status_text.insert("end", f"{message}\n")
+        formatted_message = f"[{timestamp}] {message}"
+        self.status_text.insert("end", f"{formatted_message}\n")
         self.status_text.see("end")
+        
+        # Also log to terminal if it exists
+        if hasattr(self, 'terminal_text'):
+            self.terminal_text.insert("end", f"{formatted_message}\n")
+            self.terminal_text.see("end")
+        
         self.root.update_idletasks()
         
     def start_generation(self):
@@ -2425,54 +2544,19 @@ Created with ❤️ for audiobook enthusiasts""")
             self.progress_indicator.configure(text="📊 Ready to generate")
             
     def generate_chapter_with_custom_prompt(self, chapter_text, system_instructions, output_file, custom_prompt):
-        """Generate audio with custom prompt using REST TTS API with proper style guidance"""
-        from google import genai
-        from google.genai import types
-        import wave
-
-        def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
-            with wave.open(filename, "wb") as wf:
-                wf.setnchannels(channels)
-                wf.setsampwidth(sample_width)
-                wf.setframerate(rate)
-                wf.writeframes(pcm)
-
-        client = genai.Client(api_key=os.environ['GOOGLE_API_KEY'])
-
-        # Prepend the user's exact custom prompt as a style paragraph before the content
-        # This allows the user full control over the style instruction
-        if custom_prompt and custom_prompt.strip():
-            # Use the user's exact prompt text as a style instruction
-            tts_prompt = f"{custom_prompt.strip()}: {chapter_text}"
-        else:
-            # Default fallback if no custom prompt provided
-            tts_prompt = f"Narrate this audiobook chapter in a professional, engaging style: {chapter_text}"
-
-        # Define a progress callback for quota management and rate limiting
-        def progress_callback(message):
-            self.log_message(f"🎤 {message}")
-            # Update progress indicator for long waits
-            if "Waiting" in message or "Rate limited" in message:
-                self.progress_indicator.configure(text=f"⏳ {message}")
-            self.root.update_idletasks()
-
+        """Generate audio with custom prompt using the app.py generation functions with safe chunk mode"""
+        from app import generate_chapter_audio
+        
+        # Use the app.py generation function with safe chunk mode
         try:
-            # Generate audio with quota-aware rate limiting using selected TTS model
-            data = generate_audio_with_quota_awareness(
-                client=client,
-                prompt=tts_prompt,
-                voice_name=self.narrator_voice.get(),
-                model=self.tts_model.get(),  # Use selected TTS model
-                max_retries=3,
-                progress_callback=progress_callback
+            actual_output_file = generate_chapter_audio(
+                chapter_text=chapter_text,
+                output_file=output_file,
+                model=self.tts_model.get(),
+                custom_prompt=custom_prompt,
+                safe_chunk_mode=self.safe_chunk_mode.get()
             )
-
-            # Handle file collisions
-            final_output_file = self.state_manager.handle_file_collision(output_file)
-            wave_file(final_output_file, data)
-
-            # Return the actual file used
-            return final_output_file
+            return actual_output_file
 
         except QuotaExhaustedError as e:
             error_msg = f"🚦 Quota exhausted: {str(e)}"
