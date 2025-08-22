@@ -1,7 +1,7 @@
 import time
 import logging
 import threading
-from typing import Optional, Callable, Any, Dict
+from typing import Optional, Callable, Any, Dict, Union
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import queue
@@ -19,7 +19,7 @@ class RateLimit:
     tokens_per_minute: int = 10000
     current_requests: int = 0
     current_tokens: int = 0
-    window_start: datetime = None
+    window_start: Optional[datetime] = None
     
     def __post_init__(self):
         if self.window_start is None:
@@ -51,7 +51,7 @@ class SmartRateLimiter:
         now = datetime.now()
         rate_limit = self.rate_limits.get(model)
         
-        if rate_limit and (now - rate_limit.window_start) >= timedelta(minutes=1):
+        if rate_limit and rate_limit.window_start and (now - rate_limit.window_start) >= timedelta(minutes=1):
             logger.info(f"🔄 Resetting rate limit window for {model}")
             rate_limit.current_requests = 0
             rate_limit.current_tokens = 0
@@ -79,8 +79,11 @@ class SmartRateLimiter:
                 rate_limit.current_tokens + estimated_tokens > rate_limit.tokens_per_minute):
                 
                 # Calculate how long to wait until next window
-                time_until_reset = 60 - (datetime.now() - rate_limit.window_start).total_seconds()
-                wait_time = max(0, time_until_reset)
+                if rate_limit.window_start:
+                    time_until_reset = 60 - (datetime.now() - rate_limit.window_start).total_seconds()
+                    wait_time = max(0, time_until_reset)
+                else:
+                    wait_time = 60.0  # Default wait time if no window start
                 
                 logger.warning(f"🚦 Rate limit reached for {model}. "
                              f"Requests: {rate_limit.current_requests}/{rate_limit.requests_per_minute}, "
@@ -216,10 +219,11 @@ class QuotaAwareRetryHandler:
                 print(f"🔍 DEBUG: Has response attribute: {hasattr(e, 'response')}")
                 
                 # Handle different error types
-                if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
-                    status_code = e.response.status_code
+                response_obj = getattr(e, 'response', None)
+                if response_obj and hasattr(response_obj, 'status_code'):
+                    status_code = response_obj.status_code
                     print(f"🔍 DEBUG: HTTP status code: {status_code}")
-                    print(f"🔍 DEBUG: Response headers: {getattr(e.response, 'headers', 'N/A')}")
+                    print(f"🔍 DEBUG: Response headers: {getattr(response_obj, 'headers', 'N/A')}")
                     
                     if status_code == 429:  # Rate limit exceeded
                         print(f"🔍 DEBUG: Rate limit exceeded (429)")
@@ -318,7 +322,15 @@ def generate_audio_with_quota_awareness(client, prompt: str, voice_name: str,
     print(f"🔍 DEBUG: Estimated tokens: {estimated_tokens}")
 
     def _generate_audio():
-        from google.genai import types
+        try:
+            from google.genai import types  # type: ignore
+        except ImportError:
+            # Fallback for different import structure
+            try:
+                import google.generativeai as genai  # type: ignore
+                types = genai.types  # type: ignore
+            except ImportError:
+                raise ImportError("Could not import google.genai. Please install the google-genai package.")
         
         print(f"🔍 DEBUG: Preparing API request configuration...")
         print(f"🔍 DEBUG: Response modalities: ['AUDIO']")
@@ -363,12 +375,13 @@ def generate_audio_with_quota_awareness(client, prompt: str, voice_name: str,
             print(f"🔍 DEBUG: API call failed after {api_duration:.2f} seconds")
             print(f"🔍 DEBUG: Exception type: {type(e).__name__}")
             print(f"🔍 DEBUG: Exception message: {str(e)}")
-            if hasattr(e, 'response'):
-                print(f"🔍 DEBUG: Response object present: {hasattr(e, 'response')}")
-                if hasattr(e.response, 'status_code'):
-                    print(f"🔍 DEBUG: HTTP status code: {e.response.status_code}")
-                if hasattr(e.response, 'text'):
-                    print(f"🔍 DEBUG: Response text: {e.response.text[:500]}...")
+            response_obj = getattr(e, 'response', None)
+            if response_obj:
+                print(f"🔍 DEBUG: Response object present: {response_obj is not None}")
+                if hasattr(response_obj, 'status_code'):
+                    print(f"🔍 DEBUG: HTTP status code: {response_obj.status_code}")
+                if hasattr(response_obj, 'text'):
+                    print(f"🔍 DEBUG: Response text: {response_obj.text[:500]}...")
             print(f"🔍 DEBUG: === API CALL FAILED ===")
             raise
 

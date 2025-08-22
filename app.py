@@ -2,11 +2,46 @@ import os
 import wave
 import glob
 import re
-import tiktoken
-from google import genai
-from google.genai import types
-from dotenv import load_dotenv
-from pydub import AudioSegment
+try:
+    import tiktoken  # type: ignore
+except ImportError:
+    tiktoken = None  # type: ignore
+
+try:
+    from google import genai  # type: ignore
+    from google.genai import types  # type: ignore
+except ImportError:
+    # Fallback for different import structure
+    try:
+        import google.generativeai as genai  # type: ignore
+        types = genai.types  # type: ignore
+    except ImportError:
+        genai = None  # type: ignore
+        types = None  # type: ignore
+
+try:
+    from dotenv import load_dotenv  # type: ignore
+except ImportError:
+    def load_dotenv(*args, **kwargs):  # type: ignore
+        """Fallback load_dotenv function"""
+        pass
+
+try:
+    from pydub import AudioSegment  # type: ignore
+except ImportError:
+    # Create a placeholder class for AudioSegment when not available
+    class AudioSegment:  # type: ignore
+        @staticmethod
+        def empty():
+            raise ImportError("Pydub library not available. Please install pydub package.")
+        
+        @staticmethod
+        def from_wav(file_path):
+            raise ImportError("Pydub library not available. Please install pydub package.")
+        
+        @staticmethod
+        def silent(duration):
+            raise ImportError("Pydub library not available. Please install pydub package.")
 from project_state import ProjectStateManager
 from api_retry_handler import ServiceUnavailableError, MaxRetriesExceededError, HTTPAPIError
 
@@ -68,7 +103,10 @@ def read_file_content(file_path):
 
 # Initialize tokenizer globally
 try:
-    tokenizer = tiktoken.get_encoding("cl100k_base")  # GPT-4 tokenizer
+    if tiktoken:
+        tokenizer = tiktoken.get_encoding("cl100k_base")  # GPT-4 tokenizer
+    else:
+        tokenizer = None
 except Exception:
     # Fallback to a rough estimate if tiktoken fails
     tokenizer = None
@@ -306,6 +344,8 @@ def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-
     try:
         print(f"🔍 DEBUG: Initializing Gemini client...")
         # Initialize Gemini client
+        if not genai:
+            raise ImportError("Google Genai library not available. Please install google-genai package.")
         client = genai.Client(api_key=GOOGLE_API_KEY)
         print(f"🔍 DEBUG: Client initialized successfully")
         
@@ -472,7 +512,7 @@ def combine_chapters(audio_files, output_file):
     
     for audio_file in audio_files:
         print(f"Adding {audio_file}")
-        audio = AudioSegment.from_wav(audio_file)
+        audio = AudioSegment.from_wav(audio_file)  # type: ignore
         
         # Ensure stereo
         if audio.channels == 1:
@@ -482,7 +522,7 @@ def combine_chapters(audio_files, output_file):
         combined += audio
         
         # Add a brief pause between chapters (2 seconds)
-        pause = AudioSegment.silent(duration=2000)
+        pause = AudioSegment.silent(duration=2000)  # type: ignore
         combined += pause
     
     combined.export(output_file, format="wav")
@@ -569,8 +609,13 @@ def main():
         else:
             # If only one chapter, just copy it as the complete audiobook
             print("Single chapter detected, creating audiobook...")
-            audio = AudioSegment.from_wav(generated_files[0])
-            audio.export("complete_audiobook.wav", format="wav")
+            try:
+                audio = AudioSegment.from_wav(generated_files[0])
+                audio.export("complete_audiobook.wav", format="wav")
+            except ImportError:
+                # Just copy the file if AudioSegment is not available
+                import shutil
+                shutil.copy2(generated_files[0], "complete_audiobook.wav")
 
         # Save file information for change detection
         state_manager.save_file_info(project_id, 'chapters')

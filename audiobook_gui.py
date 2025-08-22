@@ -1,4 +1,4 @@
-import customtkinter as ctk
+import customtkinter as ctk  # type: ignore
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import os
@@ -6,7 +6,7 @@ import threading
 import glob
 from pathlib import Path
 import webbrowser
-from PIL import Image
+from PIL import Image  # type: ignore
 import subprocess
 import sys
 import json
@@ -14,7 +14,7 @@ import queue
 
 # Import our audiobook generation logic
 from app import generate_chapter_audio, combine_chapters, read_file_content, load_config
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # type: ignore
 from project_state import ProjectStateManager
 from api_retry_handler import ServiceUnavailableError, MaxRetriesExceededError, HTTPAPIError
 from rate_limiter import generate_audio_with_quota_awareness, QuotaExhaustedError
@@ -27,18 +27,21 @@ ctk.set_appearance_mode("dark")  # Modes: "System" (standard), "Dark", "Light"
 ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
 
 # Configure HiDPI scaling
-try:
-    from ctk_scaling import configure_scaling
-    configure_scaling()
-except:
-    # Fallback HiDPI support
+def configure_scaling():
+    """Configure HiDPI scaling for the application."""
     import platform
     if platform.system() == "Windows":
         try:
-            from ctypes import windll
-            windll.shcore.SetProcessDpiAwareness(1)
-        except:
+            import ctypes
+            if hasattr(ctypes, 'windll'):
+                windll = getattr(ctypes, 'windll')  # type: ignore
+                if hasattr(windll, 'shcore'):
+                    windll.shcore.SetProcessDpiAwareness(1)  # type: ignore
+        except (ImportError, AttributeError, OSError):
             pass
+
+# Apply scaling configuration
+configure_scaling()
 
 class AudiobookGeneratorGUI:
     def __init__(self):
@@ -52,8 +55,8 @@ class AudiobookGeneratorGUI:
         self.setup_scaling()
         
         # Better proportions - wider and taller to accommodate all chunking controls and new features
-        self.root.geometry("1600x1300")
-        self.root.minsize(1400, 1200)
+        self.root.geometry("1600x1150")
+        self.root.minsize(1400, 1000)
         self.root.resizable(True, True)
         
         # Configure grid weight
@@ -275,10 +278,14 @@ Created with ❤️ for audiobook enthusiasts""")
             if platform.system() == "Windows":
                 try:
                     import ctypes
-                    user32 = ctypes.windll.user32
-                    dpi = user32.GetDpiForSystem()
-                    scale_factor = dpi / 96.0
-                except:
+                    if hasattr(ctypes, 'windll'):
+                        windll = getattr(ctypes, 'windll')  # type: ignore
+                        user32 = windll.user32  # type: ignore
+                        dpi = user32.GetDpiForSystem()
+                        scale_factor = dpi / 96.0
+                    else:
+                        scale_factor = 1.0
+                except (ImportError, AttributeError, OSError):
                     scale_factor = 1.0
             else:
                 # For Linux/Mac, try to detect scaling
@@ -943,6 +950,15 @@ Created with ❤️ for audiobook enthusiasts""")
             font=ctk.CTkFont(size=12)
         )
         about_btn.grid(row=0, column=4, padx=10, pady=10, sticky="ew")
+        
+        # Version number in bottom corner
+        version_label = ctk.CTkLabel(
+            bottom_frame,
+            text="v2.0.3",
+            font=ctk.CTkFont(size=10),
+            text_color=("gray60", "gray40")
+        )
+        version_label.grid(row=1, column=4, padx=10, pady=(0, 5), sticky="se")
         
         # Terminal frame (initially hidden)
         self.terminal_frame = ctk.CTkFrame(self.root)
@@ -1751,8 +1767,10 @@ Created with ❤️ for audiobook enthusiasts""")
                         if output_file in completed_chunks:
                             completed_chunks.remove(output_file)
                             # Save updated state
-                            self.state_manager.project_states[self.project_id]['completed_chunks'] = completed_chunks
-                            self.state_manager.save_project_state(self.project_id, self.state_manager.project_states[self.project_id])
+                            project_state = self.state_manager.load_project_state(self.project_id)
+                            if project_state:
+                                project_state['completed_chunks'] = completed_chunks
+                                self.state_manager.save_project_state(self.project_id, project_state)
                         self.log_message(f"🔄 Marked as incomplete: {chunk_key}")
                 
                 # Refresh display
@@ -2470,7 +2488,8 @@ Created with ❤️ for audiobook enthusiasts""")
 
                 # Mark as completed
                 self.file_chunks[display_name]['completed'] = True
-                self.state_manager.mark_chunk_completed(self.project_id, output_file)
+                if self.project_id:
+                    self.state_manager.mark_chunk_completed(self.project_id, output_file)
 
                 # Update progress
                 progress = (i + 1) / len(chunks_to_process) * 0.8  # 80% for individual chunks
@@ -2502,7 +2521,8 @@ Created with ❤️ for audiobook enthusiasts""")
                 shutil.copy2(generated_files[0], "complete_audiobook.wav")
 
             # Save file information for change detection
-            self.state_manager.save_file_info(self.project_id, 'chapters')
+            if self.project_id:
+                self.state_manager.save_file_info(self.project_id, 'chapters')
 
             # Convert to final format if needed
             self.progress_var.set(0.9)
