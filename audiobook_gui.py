@@ -68,6 +68,8 @@ class AudiobookGeneratorGUI:
         self.custom_prompt = tk.StringVar(value='Use a professional, engaging audiobook narration style with appropriate pacing and emotion.')
         self.is_generating = False
         self.file_chunks = {}  # Initialize chunk storage
+        self.chunk_order = []  # Track order of chunks
+        self.resume_point = tk.StringVar(value="from_beginning")  # Resume point selection
         self.state_manager = ProjectStateManager(self.working_dir)
         self.project_id = None
         
@@ -271,7 +273,7 @@ Created with ❤️ for audiobook enthusiasts""")
         left_frame = ctk.CTkFrame(self.root)
         left_frame.grid(row=1, column=0, sticky="nsew", padx=(15, 8), pady=(0, 15))
         left_frame.grid_columnconfigure(1, weight=1)
-        left_frame.grid_rowconfigure(3, weight=1)
+        left_frame.grid_rowconfigure(4, weight=1)
         
         # Configuration Section
         ctk.CTkLabel(left_frame, text="🔧 Configuration", font=ctk.CTkFont(size=18, weight="bold")).grid(
@@ -334,40 +336,145 @@ Created with ❤️ for audiobook enthusiasts""")
         )
         browse_btn.grid(row=0, column=4, padx=(5, 0), pady=5)
         
-        # Chapter list
+        # Resume point selection
+        resume_frame = ctk.CTkFrame(left_frame)
+        resume_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=15, pady=(10, 5))
+        resume_frame.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(resume_frame, text="🎯 Resume Options", font=ctk.CTkFont(size=14, weight="bold")).grid(
+            row=0, column=0, sticky="w", padx=10, pady=(10, 5)
+        )
+        
+        resume_options_frame = ctk.CTkFrame(resume_frame, fg_color="transparent")
+        resume_options_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        resume_options_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        
+        self.resume_from_beginning = ctk.CTkRadioButton(
+            resume_options_frame,
+            text="From Beginning",
+            variable=self.resume_point,
+            value="from_beginning",
+            font=ctk.CTkFont(size=11)
+        )
+        self.resume_from_beginning.grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        
+        self.resume_from_incomplete = ctk.CTkRadioButton(
+            resume_options_frame,
+            text="Skip Completed",
+            variable=self.resume_point,
+            value="skip_completed",
+            font=ctk.CTkFont(size=11)
+        )
+        self.resume_from_incomplete.grid(row=0, column=1, sticky="w", padx=5, pady=2)
+        
+        self.resume_from_selected = ctk.CTkRadioButton(
+            resume_options_frame,
+            text="From Selected",
+            variable=self.resume_point,
+            value="from_selected",
+            font=ctk.CTkFont(size=11)
+        )
+        self.resume_from_selected.grid(row=0, column=2, sticky="w", padx=5, pady=2)
+        
+        # Chapter list with advanced management
         chapter_list_frame = ctk.CTkFrame(left_frame)
-        chapter_list_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=15, pady=(10, 15))
+        chapter_list_frame.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=15, pady=(5, 15))
         chapter_list_frame.grid_columnconfigure(0, weight=1)
-        chapter_list_frame.grid_rowconfigure(1, weight=1)
+        chapter_list_frame.grid_rowconfigure(2, weight=1)
         
         list_header = ctk.CTkFrame(chapter_list_frame, fg_color="transparent")
         list_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
         list_header.grid_columnconfigure(0, weight=1)
         
-        ctk.CTkLabel(list_header, text="📚 Chapters Found", font=ctk.CTkFont(size=14, weight="bold")).grid(
+        ctk.CTkLabel(list_header, text="📚 Chapters & Chunks", font=ctk.CTkFont(size=14, weight="bold")).grid(
             row=0, column=0, sticky="w"
         )
         
+        # Management buttons
+        mgmt_buttons = ctk.CTkFrame(list_header, fg_color="transparent")
+        mgmt_buttons.grid(row=0, column=1, sticky="e")
+        
         refresh_btn = ctk.CTkButton(
-            list_header, 
-            text="🔄", 
-            command=self.refresh_chapters, 
+            mgmt_buttons,
+            text="🔄",
+            command=self.refresh_chapters,
             width=30,
             height=25,
             font=ctk.CTkFont(size=11)
         )
-        refresh_btn.grid(row=0, column=1, sticky="e")
+        refresh_btn.grid(row=0, column=0, padx=(0, 2))
+        
+        self.remove_btn = ctk.CTkButton(
+            mgmt_buttons,
+            text="🗑️",
+            command=self.remove_selected_chunk,
+            width=30,
+            height=25,
+            font=ctk.CTkFont(size=11),
+            state="disabled"
+        )
+        self.remove_btn.grid(row=0, column=1, padx=2)
+        
+        self.move_up_btn = ctk.CTkButton(
+            mgmt_buttons,
+            text="⬆️",
+            command=self.move_chunk_up,
+            width=30,
+            height=25,
+            font=ctk.CTkFont(size=11),
+            state="disabled"
+        )
+        self.move_up_btn.grid(row=0, column=2, padx=2)
+        
+        self.move_down_btn = ctk.CTkButton(
+            mgmt_buttons,
+            text="⬇️",
+            command=self.move_chunk_down,
+            width=30,
+            height=25,
+            font=ctk.CTkFont(size=11),
+            state="disabled"
+        )
+        self.move_down_btn.grid(row=0, column=3, padx=(2, 0))
+        
+        # Instruction label
+        ctk.CTkLabel(
+            chapter_list_frame,
+            text="💡 Select chunks to manage • Drag to reorder • Right-click for options",
+            font=ctk.CTkFont(size=10),
+            text_color=("gray60", "gray40")
+        ).grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
+        
+        # Enhanced chapter listbox with drag & drop support
+        listbox_frame = ctk.CTkFrame(chapter_list_frame, fg_color="transparent")
+        listbox_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        listbox_frame.grid_columnconfigure(0, weight=1)
+        listbox_frame.grid_rowconfigure(0, weight=1)
         
         self.chapter_listbox = tk.Listbox(
-            chapter_list_frame, 
-            height=8, 
-            bg="#2b2b2b", 
-            fg="white", 
+            listbox_frame,
+            height=8,
+            bg="#2b2b2b",
+            fg="white",
             selectbackground="#1f6aa5",
-            font=("Segoe UI", 10)
+            font=("Segoe UI", 10),
+            selectmode=tk.EXTENDED  # Allow multiple selection
         )
-        self.chapter_listbox.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.chapter_listbox.grid(row=0, column=0, sticky="nsew")
         self.chapter_listbox.bind('<<ListboxSelect>>', self.on_chapter_select)
+        self.chapter_listbox.bind('<Button-3>', self.show_chunk_context_menu)  # Right-click
+        self.chapter_listbox.bind('<Button-1>', self.on_drag_start)
+        self.chapter_listbox.bind('<B1-Motion>', self.on_drag_motion)
+        self.chapter_listbox.bind('<ButtonRelease-1>', self.on_drag_end)
+        
+        # Add scrollbar
+        chapter_scrollbar = ctk.CTkScrollbar(listbox_frame, command=self.chapter_listbox.yview)
+        chapter_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.chapter_listbox.configure(yscrollcommand=chapter_scrollbar.set)
+        
+        # Drag and drop state variables
+        self.drag_start_index = None
+        self.drag_data = None
         
         # Right Column - Custom Prompt and Generation
         right_frame = ctk.CTkFrame(self.root)
@@ -932,13 +1039,253 @@ Created with ❤️ for audiobook enthusiasts""")
             self.log_message(f"❌ Chapters folder not found: {chapters_dir}")
             self.file_chunks = {}
             
+    def on_drag_start(self, event):
+        """Handle start of drag operation"""
+        index = self.chapter_listbox.nearest(event.y)
+        if index >= 0 and index < self.chapter_listbox.size():
+            self.drag_start_index = index
+            self.drag_data = self.chapter_listbox.get(index)
+    
+    def on_drag_motion(self, event):
+        """Handle drag motion"""
+        if self.drag_start_index is not None:
+            current_index = self.chapter_listbox.nearest(event.y)
+            if current_index != self.drag_start_index and 0 <= current_index < self.chapter_listbox.size():
+                # Visual feedback for drag operation
+                self.chapter_listbox.selection_clear(0, tk.END)
+                self.chapter_listbox.selection_set(current_index)
+    
+    def on_drag_end(self, event):
+        """Handle end of drag operation"""
+        if self.drag_start_index is not None:
+            end_index = self.chapter_listbox.nearest(event.y)
+            if (end_index != self.drag_start_index and
+                0 <= end_index < self.chapter_listbox.size()):
+                self.move_chunk_to_position(self.drag_start_index, end_index)
+        
+        self.drag_start_index = None
+        self.drag_data = None
+    
+    def move_chunk_to_position(self, from_index, to_index):
+        """Move chunk from one position to another"""
+        try:
+            # Get the item data
+            item_text = self.chapter_listbox.get(from_index)
+            
+            # Find the corresponding chunk in our data
+            chunk_key = None
+            for key in self.file_chunks:
+                display_name = key.split(' (')[0] if ' (' in key else key
+                if item_text.startswith(display_name) or item_text.startswith(f"✅ {display_name}"):
+                    chunk_key = key
+                    break
+            
+            if chunk_key:
+                # Update the order
+                if chunk_key in self.chunk_order:
+                    self.chunk_order.remove(chunk_key)
+                self.chunk_order.insert(to_index, chunk_key)
+                
+                # Refresh the display
+                self.refresh_chapter_display()
+                self.log_message(f"📝 Moved chunk to position {to_index + 1}")
+                
+        except Exception as e:
+            self.log_message(f"❌ Error moving chunk: {str(e)}")
+    
+    def remove_selected_chunk(self):
+        """Remove selected chunks from the list"""
+        selection = self.chapter_listbox.curselection()
+        if not selection:
+            return
+        
+        # Confirm removal
+        if len(selection) == 1:
+            item_text = self.chapter_listbox.get(selection[0])
+            message = f"Remove this chunk?\n\n{item_text}"
+        else:
+            message = f"Remove {len(selection)} selected chunks?"
+        
+        if messagebox.askyesno("Confirm Removal", message):
+            # Get the keys to remove
+            keys_to_remove = []
+            for index in selection:
+                item_text = self.chapter_listbox.get(index)
+                for key in self.file_chunks:
+                    display_name = key.split(' (')[0] if ' (' in key else key
+                    if item_text.startswith(display_name) or item_text.startswith(f"✅ {display_name}"):
+                        keys_to_remove.append(key)
+                        break
+            
+            # Remove from data structures
+            for key in keys_to_remove:
+                if key in self.file_chunks:
+                    del self.file_chunks[key]
+                if key in self.chunk_order:
+                    self.chunk_order.remove(key)
+            
+            # Refresh display
+            self.refresh_chapter_display()
+            self.log_message(f"🗑️ Removed {len(keys_to_remove)} chunk(s)")
+    
+    def move_chunk_up(self):
+        """Move selected chunk up in the list"""
+        selection = self.chapter_listbox.curselection()
+        if len(selection) == 1 and selection[0] > 0:
+            self.move_chunk_to_position(selection[0], selection[0] - 1)
+    
+    def move_chunk_down(self):
+        """Move selected chunk down in the list"""
+        selection = self.chapter_listbox.curselection()
+        if len(selection) == 1 and selection[0] < self.chapter_listbox.size() - 1:
+            self.move_chunk_to_position(selection[0], selection[0] + 1)
+    
+    def show_chunk_context_menu(self, event):
+        """Show context menu for chunk management"""
+        index = self.chapter_listbox.nearest(event.y)
+        if index >= 0 and index < self.chapter_listbox.size():
+            # Select the item
+            self.chapter_listbox.selection_clear(0, tk.END)
+            self.chapter_listbox.selection_set(index)
+            
+            # Create context menu
+            context_menu = tk.Menu(self.root, tearoff=0)
+            
+            item_text = self.chapter_listbox.get(index)
+            is_completed = item_text.startswith("✅")
+            
+            context_menu.add_command(
+                label="👁️ Preview",
+                command=self.preview_chapter
+            )
+            context_menu.add_separator()
+            
+            if index > 0:
+                context_menu.add_command(
+                    label="⬆️ Move Up",
+                    command=self.move_chunk_up
+                )
+            
+            if index < self.chapter_listbox.size() - 1:
+                context_menu.add_command(
+                    label="⬇️ Move Down",
+                    command=self.move_chunk_down
+                )
+            
+            context_menu.add_separator()
+            context_menu.add_command(
+                label="🗑️ Remove",
+                command=self.remove_selected_chunk
+            )
+            
+            if is_completed:
+                context_menu.add_separator()
+                context_menu.add_command(
+                    label="🔄 Mark as Incomplete",
+                    command=lambda: self.toggle_chunk_completion(index)
+                )
+            else:
+                context_menu.add_separator()
+                context_menu.add_command(
+                    label="✅ Mark as Complete",
+                    command=lambda: self.toggle_chunk_completion(index)
+                )
+            
+            # Show menu
+            try:
+                context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                context_menu.grab_release()
+    
+    def toggle_chunk_completion(self, index):
+        """Toggle completion status of a chunk"""
+        try:
+            item_text = self.chapter_listbox.get(index)
+            
+            # Find the chunk key
+            chunk_key = None
+            for key in self.file_chunks:
+                display_name = key.split(' (')[0] if ' (' in key else key
+                if item_text.startswith(display_name) or item_text.startswith(f"✅ {display_name}"):
+                    chunk_key = key
+                    break
+            
+            if chunk_key and chunk_key in self.file_chunks:
+                # Toggle completion status
+                current_status = self.file_chunks[chunk_key].get('completed', False)
+                self.file_chunks[chunk_key]['completed'] = not current_status
+                
+                # Update project state
+                if self.project_id:
+                    chunk_info = self.file_chunks[chunk_key]
+                    output_file = os.path.join(self.output_path.get(),
+                                             chunk_info['chunk_filename'].replace('.txt', '.wav'))
+                    
+                    if not current_status:  # Now completed
+                        self.state_manager.mark_chunk_completed(self.project_id, output_file)
+                        self.log_message(f"✅ Marked as completed: {chunk_key}")
+                    else:  # Now incomplete
+                        # Remove from completed chunks
+                        completed_chunks = self.state_manager.get_completed_chunks(self.project_id)
+                        if output_file in completed_chunks:
+                            completed_chunks.remove(output_file)
+                            # Save updated state
+                            self.state_manager.project_states[self.project_id]['completed_chunks'] = completed_chunks
+                            self.state_manager.save_project_state(self.project_id, self.state_manager.project_states[self.project_id])
+                        self.log_message(f"🔄 Marked as incomplete: {chunk_key}")
+                
+                # Refresh display
+                self.refresh_chapter_display()
+                
+        except Exception as e:
+            self.log_message(f"❌ Error toggling completion: {str(e)}")
+    
+    def refresh_chapter_display(self):
+        """Refresh the chapter display maintaining current order"""
+        self.chapter_listbox.delete(0, tk.END)
+        
+        # Use chunk_order if available, otherwise use file_chunks keys
+        if self.chunk_order:
+            display_order = [key for key in self.chunk_order if key in self.file_chunks]
+            # Add any new chunks not in the order
+            for key in self.file_chunks:
+                if key not in display_order:
+                    display_order.append(key)
+        else:
+            display_order = list(self.file_chunks.keys())
+        
+        # Update chunk_order to match current state
+        self.chunk_order = display_order.copy()
+        
+        for display_name in display_order:
+            if display_name in self.file_chunks:
+                chunk_info = self.file_chunks[display_name]
+                if chunk_info.get('completed', False):
+                    self.chapter_listbox.insert(tk.END, f"✅ {display_name}")
+                    self.chapter_listbox.itemconfig(tk.END, {'fg': 'green', 'bg': '#2d3a2d'})
+                else:
+                    self.chapter_listbox.insert(tk.END, display_name)
+                    self.chapter_listbox.itemconfig(tk.END, {'fg': 'white', 'bg': '#2b2b2b'})
+
     def on_chapter_select(self, event):
         """Handle chapter selection"""
         selection = self.chapter_listbox.curselection()
         if selection:
             self.preview_btn.configure(state="normal")
+            self.remove_btn.configure(state="normal")
+            # Enable move buttons based on position
+            if len(selection) == 1:  # Only enable move for single selection
+                index = selection[0]
+                self.move_up_btn.configure(state="normal" if index > 0 else "disabled")
+                self.move_down_btn.configure(state="normal" if index < self.chapter_listbox.size() - 1 else "disabled")
+            else:
+                self.move_up_btn.configure(state="disabled")
+                self.move_down_btn.configure(state="disabled")
         else:
             self.preview_btn.configure(state="disabled")
+            self.remove_btn.configure(state="disabled")
+            self.move_up_btn.configure(state="disabled")
+            self.move_down_btn.configure(state="disabled")
             
     def preview_chapter(self):
         """Preview selected chapter content"""
@@ -1454,12 +1801,73 @@ Created with ❤️ for audiobook enthusiasts""")
                 self.log_message("❌ No files or chunks found!")
                 return
 
-            chunks_to_process = [k for k, v in self.file_chunks.items() if not v.get('completed', False)]
-            completed_chunks = [k for k, v in self.file_chunks.items() if v.get('completed', False)]
+            # Determine which chunks to process based on resume option
+            resume_option = self.resume_point.get()
+            all_chunks = list(self.file_chunks.keys())
+            
+            if resume_option == "from_beginning":
+                # Process all chunks, mark all as incomplete first
+                chunks_to_process = all_chunks
+                for chunk_key in self.file_chunks:
+                    self.file_chunks[chunk_key]['completed'] = False
+                self.log_message("🔄 Resume from beginning - processing all chunks")
+                
+            elif resume_option == "from_selected":
+                # Start from selected chunk
+                selection = self.chapter_listbox.curselection()
+                if not selection:
+                    self.log_message("❌ No chunk selected! Please select a chunk to start from.")
+                    return
+                
+                selected_index = selection[0]
+                selected_item = self.chapter_listbox.get(selected_index)
+                
+                # Find selected chunk key
+                selected_chunk_key = None
+                for key in self.file_chunks:
+                    display_name = key.split(' (')[0] if ' (' in key else key
+                    if selected_item.startswith(display_name) or selected_item.startswith(f"✅ {display_name}"):
+                        selected_chunk_key = key
+                        break
+                
+                if selected_chunk_key:
+                    # Get chunks from selected position onward
+                    if self.chunk_order:
+                        try:
+                            start_index = self.chunk_order.index(selected_chunk_key)
+                            chunks_to_process = self.chunk_order[start_index:]
+                        except ValueError:
+                            chunks_to_process = [selected_chunk_key]
+                    else:
+                        # Use listbox order
+                        chunks_to_process = []
+                        start_found = False
+                        for i in range(self.chapter_listbox.size()):
+                            item = self.chapter_listbox.get(i)
+                            for key in self.file_chunks:
+                                display_name = key.split(' (')[0] if ' (' in key else key
+                                if item.startswith(display_name) or item.startswith(f"✅ {display_name}"):
+                                    if start_found or key == selected_chunk_key:
+                                        chunks_to_process.append(key)
+                                        start_found = True
+                                    break
+                    
+                    self.log_message(f"🎯 Resume from selected: {selected_chunk_key}")
+                    self.log_message(f"📚 Processing {len(chunks_to_process)} chunks from selection onward")
+                else:
+                    self.log_message("❌ Could not find selected chunk!")
+                    return
+                    
+            else:  # skip_completed (default behavior)
+                chunks_to_process = [k for k, v in self.file_chunks.items() if not v.get('completed', False)]
+                completed_chunks = [k for k, v in self.file_chunks.items() if v.get('completed', False)]
+                self.log_message(f"📚 Processing {len(chunks_to_process)} incomplete chunks...")
+                if completed_chunks:
+                    self.log_message(f"📋 {len(completed_chunks)} chunks already completed")
 
-            self.log_message(f"📚 Processing {len(chunks_to_process)} new chunks...")
-            if completed_chunks:
-                self.log_message(f"📋 {len(completed_chunks)} chunks already completed")
+            if not chunks_to_process:
+                self.log_message("✅ All chunks are already completed!")
+                return
 
             # Create output directory
             output_dir = self.output_path.get()
