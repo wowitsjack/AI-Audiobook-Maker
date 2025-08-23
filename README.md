@@ -27,10 +27,19 @@ A professional-grade text-to-speech audiobook generator using Google's Gemini 2.
 
 ## Quick Start
 
-### Option 1: Download Pre-built Binary (Recommended)
-1. Download the latest release from [Releases](https://github.com/wowitsjacks/audiobook-maker/releases)
+### Option 1: Download Pre-built Release (Recommended)
+
+**Choose your platform:**
+
+- **🐧 Linux Binary**: [AI-Audiobook-Generator-v2.1.0-Linux.zip](https://github.com/wowitsjack/audiobook-maker/releases/download/v2.1.0/AI-Audiobook-Generator-v2.1.0-Linux.zip) - Standalone executable (300MB)
+- **🪟 Windows Easy-Launcher**: [AI-Audiobook-Generator-v2.1.0-Windows-Easy-Launcher.zip](https://github.com/wowitsjack/audiobook-maker/releases/download/v2.1.0/AI-Audiobook-Generator-v2.1.0-Windows-Easy-Launcher.zip) - Source + launcher
+- **🍎 macOS Easy-Launcher**: [AI-Audiobook-Generator-v2.1.0-macOS-Easy-Launcher.zip](https://github.com/wowitsjack/audiobook-maker/releases/download/v2.1.0/AI-Audiobook-Generator-v2.1.0-macOS-Easy-Launcher.zip) - Source + launcher
+- **🐧 Linux Easy-Launcher**: [AI-Audiobook-Generator-v2.1.0-Linux-Easy-Launcher.zip](https://github.com/wowitsjack/audiobook-maker/releases/download/v2.1.0/AI-Audiobook-Generator-v2.1.0-Linux-Easy-Launcher.zip) - Source + launcher
+
+**Installation:**
+1. Download the appropriate file for your platform
 2. Extract the zip file
-3. Run `START-HERE` script for your platform
+3. Run `START-HERE` script (`.bat` for Windows, `.command` for macOS, `.sh` for Linux)
 4. Enter your Google Gemini API key when prompted
 
 ### Option 2: Install from Source
