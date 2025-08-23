@@ -10,7 +10,8 @@ from pathlib import Path
 
 class SourceReleaseBuilder:
     def __init__(self):
-        self.root_dir = Path(__file__).parent.parent
+        self.src_dir = Path(__file__).parent.parent
+        self.root_dir = self.src_dir.parent
         self.version = "2.1.0"
         self.release_dir = self.root_dir / "releases"
         

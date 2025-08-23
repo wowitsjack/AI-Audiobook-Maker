@@ -15,7 +15,8 @@ import tempfile
 
 class AudiobookBuilder:
     def __init__(self):
-        self.root_dir = Path(__file__).parent.parent
+        self.src_dir = Path(__file__).parent.parent
+        self.root_dir = self.src_dir.parent
         self.version = "2.1.0"  # Updated version
         self.app_name = "ai-audiobook-generator"
         self.build_dir = self.root_dir / "build"
@@ -78,14 +79,24 @@ class AudiobookBuilder:
             "--distpath", str(self.dist_dir),
             "--clean",
             "--noconfirm",
-            str(self.root_dir / "audiobook_gui_launcher.py")
+            str(self.src_dir / "audiobook_gui_launcher.py")
         ]
         
         # Add platform-specific options
         if target_platform == 'windows':
-            cmd.extend(["--windowed", "--icon", "icon.ico"])  # If we have an icon
+            cmd.extend(["--windowed"])
+            # Add icon if available
+            if (self.root_dir / "book.png").exists():
+                cmd.extend(["--icon", str(self.root_dir / "book.png")])
         elif target_platform == 'darwin':
             cmd.extend(["--windowed"])
+            # Add icon if available
+            if (self.root_dir / "book.png").exists():
+                cmd.extend(["--icon", str(self.root_dir / "book.png")])
+        elif target_platform == 'linux':
+            # Add icon if available
+            if (self.root_dir / "book.png").exists():
+                cmd.extend(["--icon", str(self.root_dir / "book.png")])
         
         # Run PyInstaller
         subprocess.run(cmd, cwd=self.root_dir, check=True)
@@ -204,8 +215,12 @@ For issues and updates: https://github.com/wowitsjack/audiobook-maker
         (package_dir / "README.txt").write_text(readme_content)
         
         # Copy requirements.txt for reference
-        if (self.root_dir / "requirements.txt").exists():
-            shutil.copy2(self.root_dir / "requirements.txt", package_dir)
+        if (self.src_dir / "requirements.txt").exists():
+            shutil.copy2(self.src_dir / "requirements.txt", package_dir)
+        
+        # Copy install script for Linux
+        if platform_name == 'linux' and (self.src_dir / "install.sh").exists():
+            shutil.copy2(self.src_dir / "install.sh", package_dir)
         
         # Create archive
         archive_name = f"{package_name}{config['archive_ext']}"
