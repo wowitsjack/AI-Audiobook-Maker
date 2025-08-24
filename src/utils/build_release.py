@@ -17,7 +17,7 @@ class AudiobookBuilder:
     def __init__(self):
         self.src_dir = Path(__file__).parent.parent
         self.root_dir = self.src_dir.parent
-        self.version = "2.1.0"  # Updated version
+        self.version = "2.2.0"  # Updated version
         self.app_name = "ai-audiobook-generator"
         self.build_dir = self.root_dir / "build"
         self.dist_dir = self.root_dir / "dist"
