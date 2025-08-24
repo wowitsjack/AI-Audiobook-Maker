@@ -7,6 +7,7 @@ Generates real-time instrumental music for audiobook backgrounds
 import asyncio
 import os
 import logging
+import io
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -22,7 +23,7 @@ try:
     LYRIA_AVAILABLE = True
 except ImportError:
     LYRIA_AVAILABLE = False
-    logging.warning("Lyria RealTime not available. Install google-genai to enable music generation.")
+    logging.warning("google-genai package required for music generation. Install with: pip install google-genai")
 
 try:
     import numpy as np
@@ -30,11 +31,8 @@ try:
 except ImportError:
     NUMPY_AVAILABLE = False
 
-try:
-    from pydub import AudioSegment
-    PYDUB_AVAILABLE = True
-except ImportError:
-    PYDUB_AVAILABLE = False
+# PyDub removed - using numpy/soundfile only
+PYDUB_AVAILABLE = False
 
 
 class MusicMood(Enum):
@@ -77,7 +75,7 @@ class MusicConfig:
     volume: float = 0.3
     mood: MusicMood = MusicMood.AMBIENT
     genre: MusicGenre = MusicGenre.AMBIENT
-    custom_prompts: List[str] = None
+    custom_prompts: Optional[List[str]] = None
     
     def __post_init__(self):
         if self.custom_prompts is None:
@@ -85,70 +83,73 @@ class MusicConfig:
 
 
 class MusicGenerator:
-    """Real-time background music generator for audiobooks"""
+    """Real-time background music generator for audiobooks using Lyria RealTime"""
     
     def __init__(self, api_key: Optional[str] = None):
         """Initialize music generator
         
         Args:
-            api_key: Google AI API key. If None, will use GEMINI_API_KEY env var
+            api_key: Google AI API key. If None, will use GOOGLE_API_KEY env var
         """
         self.logger = logging.getLogger(__name__)
         
         if not LYRIA_AVAILABLE:
-            raise ImportError("google-genai package required for music generation")
+            raise ImportError("google-genai package required for music generation. Install with: pip install google-genai")
             
-        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
+        self.api_key = api_key or os.getenv('GOOGLE_API_KEY')
         if not self.api_key:
-            raise ValueError("API key required for music generation")
+            raise ValueError("API key required for music generation. Set GOOGLE_API_KEY environment variable.")
             
+        # Initialize client with v1alpha API version for Lyria access
         self.client = genai.Client(
             api_key=self.api_key,
             http_options={'api_version': 'v1alpha'}
         )
         
         self.session = None
+        self.session_context = None
         self.is_generating = False
         self.audio_queue = queue.Queue()
         self.config = MusicConfig()
         self.audio_buffer = []
         self.buffer_lock = threading.Lock()
+        self.receive_task = None
         
-        # Audio format specs from API
+        # Audio format specs from Lyria RealTime
         self.sample_rate = 48000
         self.channels = 2
         self.bit_depth = 16
         
     def get_prompts_for_mood_and_genre(self, mood: MusicMood, genre: MusicGenre) -> List[types.WeightedPrompt]:
-        """Generate prompts based on mood and genre"""
+        """Generate prompts based on mood and genre using Lyria format"""
         prompts = []
         
         # Genre-specific prompts
         genre_prompts = {
-            MusicGenre.CLASSICAL: ["Classical Orchestra", "Strings", "Elegant Composition"],
-            MusicGenre.AMBIENT: ["Ambient Soundscape", "Atmospheric Pads", "Ethereal"],
-            MusicGenre.CINEMATIC: ["Cinematic Score", "Orchestral Drama", "Film Music"],
-            MusicGenre.FOLK: ["Acoustic Guitar", "Folk Melodies", "Organic Instruments"],
-            MusicGenre.ELECTRONIC: ["Soft Synths", "Electronic Ambient", "Digital Soundscape"],
-            MusicGenre.ORCHESTRAL: ["Full Orchestra", "Symphonic", "Rich Orchestration"],
-            MusicGenre.PIANO: ["Solo Piano", "Gentle Piano", "Melodic Piano"],
-            MusicGenre.STRINGS: ["String Section", "Violin", "Cello", "Warm Strings"],
-            MusicGenre.NEW_AGE: ["New Age", "Meditation Music", "Healing Sounds"],
-            MusicGenre.MEDITATION: ["Meditation", "Mindfulness", "Peaceful Sounds"]
+            MusicGenre.CLASSICAL: ["Classical", "Orchestra", "Strings", "Elegant"],
+            MusicGenre.AMBIENT: ["Ambient", "Atmospheric", "Ethereal", "Spacey Synths"],
+            MusicGenre.CINEMATIC: ["Cinematic", "Orchestral Score", "Film Music", "Rich Orchestration"],
+            MusicGenre.FOLK: ["Acoustic Guitar", "Folk", "Organic", "Warm"],
+            MusicGenre.ELECTRONIC: ["Electronic", "Synths", "Digital", "Smooth"],
+            MusicGenre.ORCHESTRAL: ["Orchestra", "Symphonic", "Full Orchestra", "Classical"],
+            MusicGenre.PIANO: ["Piano", "Solo Piano", "Gentle Piano", "Melodic"],
+            MusicGenre.STRINGS: ["Strings", "Violin", "Cello", "String Section"],
+            MusicGenre.NEW_AGE: ["New Age", "Healing", "Meditation", "Peaceful"],
+            MusicGenre.MEDITATION: ["Meditation", "Mindfulness", "Calm", "Tranquil"]
         }
         
         # Mood-specific prompts
         mood_prompts = {
-            MusicMood.AMBIENT: ["Calm", "Peaceful", "Subdued", "Background"],
-            MusicMood.DRAMATIC: ["Dramatic", "Intense", "Powerful", "Emotional"],
+            MusicMood.AMBIENT: ["Ambient", "Chill", "Subdued", "Background"],
+            MusicMood.DRAMATIC: ["Dramatic", "Emotional", "Intense", "Powerful"],
             MusicMood.PEACEFUL: ["Peaceful", "Tranquil", "Serene", "Gentle"],
-            MusicMood.MYSTERIOUS: ["Mysterious", "Dark", "Enigmatic", "Suspenseful"],
-            MusicMood.ADVENTURE: ["Adventure", "Epic", "Heroic", "Journey"],
-            MusicMood.ROMANTIC: ["Romantic", "Tender", "Warm", "Loving"],
-            MusicMood.TENSE: ["Tense", "Ominous", "Building Tension", "Unsettling"],
-            MusicMood.UPLIFTING: ["Uplifting", "Hopeful", "Bright", "Inspiring"],
+            MusicMood.MYSTERIOUS: ["Mysterious", "Ominous", "Dark", "Unsettling"],
+            MusicMood.ADVENTURE: ["Adventure", "Epic", "Heroic", "Upbeat"],
+            MusicMood.ROMANTIC: ["Romantic", "Tender", "Warm", "Emotional"],
+            MusicMood.TENSE: ["Tense", "Ominous Drone", "Building", "Suspenseful"],
+            MusicMood.UPLIFTING: ["Uplifting", "Bright", "Hopeful", "Inspiring"],
             MusicMood.MELANCHOLY: ["Melancholy", "Sad", "Nostalgic", "Reflective"],
-            MusicMood.FANTASY: ["Fantasy", "Magical", "Enchanted", "Mystical"]
+            MusicMood.FANTASY: ["Fantasy", "Magical", "Mystical", "Ethereal"]
         }
         
         # Add genre prompts
@@ -162,7 +163,7 @@ class MusicGenerator:
         return prompts
         
     async def start_generation(self, config: Optional[MusicConfig] = None) -> bool:
-        """Start background music generation
+        """Start background music generation using Lyria RealTime
         
         Args:
             config: Music configuration. If None, uses default config
@@ -178,12 +179,13 @@ class MusicGenerator:
             self.config = config
             
         try:
-            self.session = await self.client.aio.live.music.connect(
+            # Store the session context for proper cleanup
+            self.session_context = self.client.aio.live.music.connect(
                 model='models/lyria-realtime-exp'
             )
             
-            # Set up audio receiver task
-            asyncio.create_task(self._receive_audio())
+            # Enter the context manager
+            self.session = await self.session_context.__aenter__()
             
             # Get prompts for mood and genre
             prompts = self.get_prompts_for_mood_and_genre(self.config.mood, self.config.genre)
@@ -204,43 +206,61 @@ class MusicGenerator:
                 brightness=self.config.brightness
             )
             
+            # Set scale if specified
             if self.config.scale:
-                music_config.scale = getattr(types.Scale, self.config.scale, types.Scale.SCALE_UNSPECIFIED)
+                try:
+                    scale_value = getattr(types.Scale, self.config.scale)
+                    music_config.scale = scale_value
+                except AttributeError:
+                    self.logger.warning(f"Unknown scale: {self.config.scale}, using default")
+                    music_config.scale = types.Scale.SCALE_UNSPECIFIED
                 
             await self.session.set_music_generation_config(config=music_config)
+            
+            # Set up audio receiver task
+            self.receive_task = asyncio.create_task(self._receive_audio())
             
             # Start music generation
             await self.session.play()
             self.is_generating = True
             
-            self.logger.info(f"Started music generation: {self.config.mood.value} {self.config.genre.value}")
+            self.logger.info(f"Started Lyria music generation: {self.config.mood.value} {self.config.genre.value}")
             return True
             
         except Exception as e:
             self.logger.error(f"Failed to start music generation: {e}")
+            self.is_generating = False
+            if hasattr(self, 'session_context') and self.session_context:
+                try:
+                    await self.session_context.__aexit__(None, None, None)
+                except:
+                    pass
+                self.session_context = None
+                self.session = None
             return False
             
     async def _receive_audio(self):
-        """Background task to receive and buffer audio chunks"""
+        """Background task to receive and buffer audio chunks from Lyria"""
         try:
-            while self.is_generating:
-                async for message in self.session.receive():
-                    if hasattr(message, 'server_content') and message.server_content.audio_chunks:
+            async for message in self.session.receive():
+                if hasattr(message, 'server_content') and hasattr(message.server_content, 'audio_chunks'):
+                    if message.server_content.audio_chunks:
                         audio_data = message.server_content.audio_chunks[0].data
                         
                         with self.buffer_lock:
                             self.audio_buffer.append(audio_data)
                             
-                        # Keep buffer size manageable (about 10 seconds)
-                        max_buffer_size = self.sample_rate * self.channels * 2 * 10  # 10 seconds
+                        # Keep buffer size manageable (about 30 seconds)
+                        max_buffer_size = self.sample_rate * self.channels * 2 * 30  # 30 seconds
                         if len(self.audio_buffer) * len(audio_data) > max_buffer_size:
                             with self.buffer_lock:
                                 self.audio_buffer.pop(0)
                                 
-                await asyncio.sleep(0.001)  # Small delay to prevent tight loop
-                
+        except asyncio.CancelledError:
+            # Normal cancellation when stopping
+            pass
         except Exception as e:
-            self.logger.error(f"Error receiving audio: {e}")
+            self.logger.error(f"Error receiving audio from Lyria: {e}")
             self.is_generating = False
             
     async def change_mood(self, mood: MusicMood, transition_weight: float = 0.5):
@@ -251,6 +271,7 @@ class MusicGenerator:
             transition_weight: Weight for smooth transition (0.1-1.0)
         """
         if not self.is_generating or not self.session:
+            self.logger.warning("Cannot change mood - generation not active")
             return
             
         try:
@@ -259,7 +280,7 @@ class MusicGenerator:
             # Get new prompts and blend with current ones for smooth transition
             new_prompts = self.get_prompts_for_mood_and_genre(mood, self.config.genre)
             
-            # Reduce weight for smooth transition
+            # Adjust weight for smooth transition
             for prompt in new_prompts:
                 prompt.weight *= transition_weight
                 
@@ -272,6 +293,7 @@ class MusicGenerator:
     async def change_genre(self, genre: MusicGenre, transition_weight: float = 0.5):
         """Change music genre with smooth transition"""
         if not self.is_generating or not self.session:
+            self.logger.warning("Cannot change genre - generation not active")
             return
             
         try:
@@ -291,9 +313,10 @@ class MusicGenerator:
     async def adjust_config(self, **kwargs):
         """Adjust music generation parameters in real-time
         
-        Accepts: bpm, density, brightness, guidance, etc.
+        Accepts: bpm, density, brightness, guidance, scale, etc.
         """
         if not self.is_generating or not self.session:
+            self.logger.warning("Cannot adjust config - generation not active")
             return
             
         try:
@@ -312,11 +335,15 @@ class MusicGenerator:
             )
             
             if self.config.scale:
-                music_config.scale = getattr(types.Scale, self.config.scale, types.Scale.SCALE_UNSPECIFIED)
+                try:
+                    scale_value = getattr(types.Scale, self.config.scale)
+                    music_config.scale = scale_value
+                except AttributeError:
+                    music_config.scale = types.Scale.SCALE_UNSPECIFIED
                 
             await self.session.set_music_generation_config(config=music_config)
             
-            # Reset context for bpm/scale changes
+            # Reset context for bpm/scale changes (per Lyria docs)
             if 'bpm' in kwargs or 'scale' in kwargs:
                 await self.session.reset_context()
                 
@@ -337,8 +364,9 @@ class MusicGenerator:
         if not self.audio_buffer:
             return None
             
-        # Calculate required samples
-        samples_needed = int(self.sample_rate * duration_seconds * self.channels * 2)  # 2 bytes per sample
+        # Calculate required bytes for 16-bit stereo PCM
+        bytes_per_second = self.sample_rate * self.channels * 2  # 2 bytes per 16-bit sample
+        bytes_needed = int(bytes_per_second * duration_seconds)
         
         with self.buffer_lock:
             if not self.audio_buffer:
@@ -347,10 +375,10 @@ class MusicGenerator:
             # Combine audio chunks to get required duration
             combined_audio = b''.join(self.audio_buffer)
             
-            if len(combined_audio) >= samples_needed:
+            if len(combined_audio) >= bytes_needed:
                 # Return requested duration and remove from buffer
-                result = combined_audio[:samples_needed]
-                remaining = combined_audio[samples_needed:]
+                result = combined_audio[:bytes_needed]
+                remaining = combined_audio[bytes_needed:]
                 
                 # Update buffer with remaining audio
                 self.audio_buffer = [remaining] if remaining else []
@@ -373,10 +401,23 @@ class MusicGenerator:
                 wav_file.setframerate(self.sample_rate)
                 wav_file.writeframes(audio_data)
                 
-            self.logger.info(f"Saved audio chunk: {filename}")
+            self.logger.info(f"Saved audio chunk: {filename} ({len(audio_data)} bytes)")
             
         except Exception as e:
             self.logger.error(f"Failed to save audio: {e}")
+            
+    def convert_to_mp3(self, wav_data: bytes, mp3_filename: str) -> bool:
+        """MP3 conversion not available - PyDub dependency removed
+        
+        Args:
+            wav_data: Raw WAV audio data
+            mp3_filename: Output MP3 filename
+            
+        Returns:
+            False - MP3 conversion not supported
+        """
+        self.logger.warning("MP3 conversion not available - PyDub dependency removed")
+        return False
             
     async def pause(self):
         """Pause music generation"""
@@ -401,7 +442,23 @@ class MusicGenerator:
         if self.session:
             try:
                 self.is_generating = False
+                
+                # Cancel receive task
+                if self.receive_task:
+                    self.receive_task.cancel()
+                    try:
+                        await self.receive_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                # Stop session and exit context manager
                 await self.session.stop()
+                
+                # Properly exit the context manager
+                if hasattr(self, 'session_context') and self.session_context:
+                    await self.session_context.__aexit__(None, None, None)
+                    self.session_context = None
+                    
                 self.session = None
                 
                 with self.buffer_lock:
@@ -435,7 +492,7 @@ async def generate_background_music(
     output_file: Optional[str] = None,
     api_key: Optional[str] = None
 ) -> Optional[str]:
-    """Generate background music for specified duration
+    """Generate background music for specified duration using Lyria RealTime
     
     Args:
         mood: Music mood
@@ -454,8 +511,8 @@ async def generate_background_music(
         if not await generator.start_generation(config):
             return None
             
-        # Wait a bit for buffer to fill
-        await asyncio.sleep(2)
+        # Wait for buffer to fill
+        await asyncio.sleep(3)
         
         # Collect audio for specified duration
         audio_chunks = []
@@ -505,18 +562,18 @@ if __name__ == "__main__":
             brightness=0.4
         )
         
-        print("Starting music generation...")
+        print("Starting Lyria RealTime music generation...")
         if await generator.start_generation(config):
             print("Music generation started successfully!")
             
-            # Let it generate for a few seconds
+            # Wait for buffer to fill
             await asyncio.sleep(5)
             
             # Get some audio
-            audio_chunk = generator.get_audio_chunk(2.0)
+            audio_chunk = generator.get_audio_chunk(3.0)
             if audio_chunk:
-                generator.save_audio_chunk(audio_chunk, "test_music.wav")
-                print("Saved test music chunk")
+                generator.save_audio_chunk(audio_chunk, "test_lyria_music.wav")
+                print("Saved test music chunk from Lyria!")
                 
             # Change mood
             print("Changing to dramatic mood...")

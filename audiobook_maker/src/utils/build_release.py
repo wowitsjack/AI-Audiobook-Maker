@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-platform builder and release script for AI Audiobook Generator
+Multi-platform builder and release script for wowitsjack's AI Audiobook Maker
 Creates standalone executables and release packages for Windows, macOS, and Linux
 """
 
@@ -15,9 +15,10 @@ import tempfile
 
 class AudiobookBuilder:
     def __init__(self):
-        self.root_dir = Path(__file__).parent.parent
-        self.version = "2.1.0"  # Updated version
-        self.app_name = "ai-audiobook-generator"
+        self.src_dir = Path(__file__).parent.parent
+        self.root_dir = self.src_dir.parent
+        self.version = "2.2.0"  # Updated version
+        self.app_name = "wowitsjacks-ai-audiobook-maker"
         self.build_dir = self.root_dir / "build"
         self.dist_dir = self.root_dir / "dist"
         self.release_dir = self.root_dir / "releases"
@@ -70,7 +71,7 @@ class AudiobookBuilder:
         
         print(f"Building binary for {target_platform}...")
         
-        # PyInstaller command
+        # PyInstaller command with proper module detection
         cmd = [
             "pyinstaller",
             "--onefile",
@@ -78,14 +79,61 @@ class AudiobookBuilder:
             "--distpath", str(self.dist_dir),
             "--clean",
             "--noconfirm",
-            str(self.root_dir / "audiobook_gui_launcher.py")
+            # Add paths
+            "--paths", str(self.src_dir),
+            # Hidden imports for all our modules
+            "--hidden-import", "gui",
+            "--hidden-import", "gui.application",
+            "--hidden-import", "gui.launch_gui",
+            "--hidden-import", "core",
+            "--hidden-import", "core.app_functions",
+            "--hidden-import", "core.cli",
+            "--hidden-import", "core.config",
+            "--hidden-import", "core.engine",
+            "--hidden-import", "music",
+            "--hidden-import", "music.generator",
+            "--hidden-import", "quality",
+            "--hidden-import", "quality.detector",
+            "--hidden-import", "state",
+            "--hidden-import", "state.manager",
+            "--hidden-import", "state.project_manager",
+            "--hidden-import", "tts",
+            "--hidden-import", "tts.generator",
+            "--hidden-import", "utils",
+            "--hidden-import", "utils.api_retry_handler",
+            "--hidden-import", "utils.rate_limiter",
+            "--hidden-import", "utils.text_processing",
+            # Common dependencies
+            "--hidden-import", "customtkinter",
+            "--hidden-import", "tkinter",
+            "--hidden-import", "tkinter.ttk",
+            "--hidden-import", "tkinter.filedialog",
+            "--hidden-import", "tkinter.messagebox",
+            "--hidden-import", "PIL",
+            "--hidden-import", "PIL.Image",
+            "--hidden-import", "PIL.ImageTk",
+            "--hidden-import", "google.genai",
+            "--hidden-import", "google.generativeai",
+            "--hidden-import", "numpy",
+            "--hidden-import", "soundfile",
+            str(self.src_dir / "audiobook_gui_launcher.py")
         ]
         
         # Add platform-specific options
         if target_platform == 'windows':
-            cmd.extend(["--windowed", "--icon", "icon.ico"])  # If we have an icon
+            cmd.extend(["--windowed"])
+            # Add icon if available
+            if (self.root_dir / "book.png").exists():
+                cmd.extend(["--icon", str(self.root_dir / "book.png")])
         elif target_platform == 'darwin':
             cmd.extend(["--windowed"])
+            # Add icon if available
+            if (self.root_dir / "book.png").exists():
+                cmd.extend(["--icon", str(self.root_dir / "book.png")])
+        elif target_platform == 'linux':
+            # Add icon if available
+            if (self.root_dir / "book.png").exists():
+                cmd.extend(["--icon", str(self.root_dir / "book.png")])
         
         # Run PyInstaller
         subprocess.run(cmd, cwd=self.root_dir, check=True)
@@ -99,7 +147,7 @@ class AudiobookBuilder:
         
         if platform_name == 'windows':
             content = f'''@echo off
-echo Starting AI Audiobook Generator...
+echo Starting wowitsjack's AI Audiobook Maker...
 echo.
 echo If this is your first time running the application:
 echo 1. Make sure you have your Gemini API key ready
@@ -111,7 +159,7 @@ pause
 '''
         elif platform_name == 'darwin':
             content = f'''#!/bin/bash
-echo "Starting AI Audiobook Generator..."
+echo "Starting wowitsjack's AI Audiobook Maker..."
 echo ""
 echo "If this is your first time running the application:"
 echo "1. Make sure you have your Gemini API key ready"
@@ -128,7 +176,7 @@ cd "$DIR"
 '''
         else:  # Linux
             content = f'''#!/bin/bash
-echo "Starting AI Audiobook Generator..."
+echo "Starting wowitsjack's AI Audiobook Maker..."
 echo ""
 echo "If this is your first time running the application:"
 echo "1. Make sure you have your Gemini API key ready"
@@ -151,7 +199,7 @@ chmod +x {config['binary_name']}
     
     def create_readme(self, platform_name):
         """Create platform-specific README"""
-        readme_content = f"""# AI Audiobook Generator v{self.version}
+        readme_content = f"""# wowitsjack's AI Audiobook Maker v{self.version}
 
 ## Quick Start
 
@@ -173,47 +221,14 @@ chmod +x {config['binary_name']}
 - **Resume Functionality**: Continue interrupted audiobook generation
 - **Multiple Voices**: Choose from various voice options and models
 
-## Usage
-
-1. **Load Text**: Click "Browse" and select your text file (.txt, .md, .epub)
-2. **Configure Settings**: 
-   - Select voice and model
-   - Adjust chunk size if needed
-   - Enable background music (optional)
-   - Enable quality detection (optional)
-3. **Set Output**: Choose where to save your audiobook
-4. **Generate**: Click "Generate Audiobook" and wait for completion
-
-## Supported Formats
-
-- **Input**: .txt, .md, .epub files
-- **Output**: .wav audio files
-
-## Troubleshooting
-
-- **API Errors**: Check your Gemini API key and internet connection
-- **Large Files**: Use smaller chunk sizes for very large texts
-- **Audio Issues**: Enable quality detection for better error handling
-
-## System Requirements
-
-- **Windows**: 10/11 (64-bit)
-- **macOS**: 10.14+ (Intel/Apple Silicon)
-- **Linux**: Ubuntu 18.04+ or equivalent (64-bit)
-
-## Support
-
-For issues and updates: https://github.com/wowitsjacks/audiobook-maker
-
----
-Built with ❤️ using Python, CustomTkinter, and Google's AI APIs
+For issues and updates: https://github.com/wowitsjack/AI-Audiobook-Maker
 """
         return readme_content
     
     def create_release_package(self, platform_name, binary_path):
         """Create a complete release package for a platform"""
         config = self.platform_configs[platform_name]
-        package_name = f"AI-Audiobook-Generator-v{self.version}-{platform_name.title()}"
+        package_name = f"wowitsjacks-AI-Audiobook-Maker-v{self.version}-{platform_name.title()}"
         package_dir = self.release_dir / package_name
         
         # Create package directory
@@ -237,8 +252,12 @@ Built with ❤️ using Python, CustomTkinter, and Google's AI APIs
         (package_dir / "README.txt").write_text(readme_content)
         
         # Copy requirements.txt for reference
-        if (self.root_dir / "requirements.txt").exists():
-            shutil.copy2(self.root_dir / "requirements.txt", package_dir)
+        if (self.src_dir / "requirements.txt").exists():
+            shutil.copy2(self.src_dir / "requirements.txt", package_dir)
+        
+        # Copy install script for Linux
+        if platform_name == 'linux' and (self.src_dir / "install.sh").exists():
+            shutil.copy2(self.src_dir / "install.sh", package_dir)
         
         # Create archive
         archive_name = f"{package_name}{config['archive_ext']}"
@@ -252,92 +271,17 @@ Built with ❤️ using Python, CustomTkinter, and Google's AI APIs
         
         print(f"Created release package: {archive_path}")
         return archive_path, package_dir
-    
-    def build_all_platforms(self):
-        """Build releases for all platforms"""
-        self.clean_build_dirs()
-        self.install_dependencies()
-        
-        # Create release directory
-        self.release_dir.mkdir(exist_ok=True)
-        
-        current_platform = platform.system().lower()
-        print(f"Building on {current_platform} platform...")
-        
-        # Note: Cross-compilation is complex with PyInstaller
-        # This script focuses on the current platform
-        if current_platform == 'linux':
-            platforms_to_build = ['linux']
-        elif current_platform == 'darwin':
-            platforms_to_build = ['darwin']
-        elif current_platform == 'windows':
-            platforms_to_build = ['windows']
-        else:
-            platforms_to_build = ['linux']  # Default fallback
-        
-        built_packages = []
-        
-        for target_platform in platforms_to_build:
-            try:
-                print(f"\n=== Building for {target_platform} ===")
-                binary_path = self.build_binary(target_platform)
-                archive_path, package_dir = self.create_release_package(target_platform, binary_path)
-                built_packages.append((target_platform, archive_path, package_dir))
-                print(f"✅ Successfully built {target_platform} package")
-            except Exception as e:
-                print(f"❌ Failed to build {target_platform}: {e}")
-        
-        return built_packages
-    
-    def install_to_local_bin(self):
-        """Install the binary to ~/.local/bin for the current user"""
-        if platform.system().lower() != 'linux':
-            print("Local bin installation only supported on Linux")
-            return
-        
-        binary_path = self.build_binary('linux')
-        local_bin = Path.home() / ".local" / "bin"
-        local_bin.mkdir(parents=True, exist_ok=True)
-        
-        target_path = local_bin / self.app_name
-        shutil.copy2(binary_path, target_path)
-        os.chmod(target_path, 0o755)
-        
-        print(f"✅ Installed to {target_path}")
-        print("Make sure ~/.local/bin is in your PATH")
 
 
 def main():
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Build AI Audiobook Generator releases")
-    parser.add_argument("--platform", choices=['windows', 'darwin', 'linux'], 
-                       help="Target platform (default: current platform)")
-    parser.add_argument("--install-local", action="store_true",
-                       help="Install binary to ~/.local/bin (Linux only)")
-    parser.add_argument("--all", action="store_true",
-                       help="Build all supported platforms")
-    
-    args = parser.parse_args()
-    
     builder = AudiobookBuilder()
+    builder.clean_build_dirs()
+    builder.install_dependencies()
+    builder.release_dir.mkdir(exist_ok=True)
     
-    if args.install_local:
-        builder.install_to_local_bin()
-    elif args.all:
-        packages = builder.build_all_platforms()
-        print(f"\n🎉 Build complete! Created {len(packages)} packages:")
-        for platform_name, archive_path, _ in packages:
-            print(f"  - {platform_name}: {archive_path.name}")
-    else:
-        target_platform = args.platform or platform.system().lower()
-        builder.clean_build_dirs()
-        builder.install_dependencies()
-        builder.release_dir.mkdir(exist_ok=True)
-        
-        binary_path = builder.build_binary(target_platform)
-        archive_path, package_dir = builder.create_release_package(target_platform, binary_path)
-        print(f"\n🎉 Build complete! Created: {archive_path.name}")
+    binary_path = builder.build_binary('linux')
+    archive_path, package_dir = builder.create_release_package('linux', binary_path)
+    print(f"\n🎉 Build complete! Created: {archive_path.name}")
 
 
 if __name__ == "__main__":

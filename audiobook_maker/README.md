@@ -1,4 +1,4 @@
-# AI Audiobook Generator v2.1.0
+# wowitsjack's AI Audiobook Maker v2.2.0
 
 A professional-grade text-to-speech audiobook generator using Google's Gemini 2.5 TTS API and Lyria RealTime music generation.
 
@@ -31,10 +31,9 @@ A professional-grade text-to-speech audiobook generator using Google's Gemini 2.
 
 **Choose your platform:**
 
-- **🐧 Linux Binary**: [AI-Audiobook-Generator-v2.1.0-Linux.zip](https://github.com/wowitsjack/audiobook-maker/releases/download/v2.1.0/AI-Audiobook-Generator-v2.1.0-Linux.zip) - Standalone executable (300MB)
-- **🪟 Windows Easy-Launcher**: [AI-Audiobook-Generator-v2.1.0-Windows-Easy-Launcher.zip](https://github.com/wowitsjack/audiobook-maker/releases/download/v2.1.0/AI-Audiobook-Generator-v2.1.0-Windows-Easy-Launcher.zip) - Source + launcher
-- **🍎 macOS Easy-Launcher**: [AI-Audiobook-Generator-v2.1.0-macOS-Easy-Launcher.zip](https://github.com/wowitsjack/audiobook-maker/releases/download/v2.1.0/AI-Audiobook-Generator-v2.1.0-macOS-Easy-Launcher.zip) - Source + launcher
-- **🐧 Linux Easy-Launcher**: [AI-Audiobook-Generator-v2.1.0-Linux-Easy-Launcher.zip](https://github.com/wowitsjack/audiobook-maker/releases/download/v2.1.0/AI-Audiobook-Generator-v2.1.0-Linux-Easy-Launcher.zip) - Source + launcher
+- **🐧 Linux Binary**: [AI-Audiobook-Generator-v2.2.0-Linux.zip](https://github.com/wowitsjack/AI-Audiobook-Maker/releases/download/v2.2.0/AI-Audiobook-Generator-v2.2.0-Linux.zip) - Standalone executable (314MB)
+- **🪟 Windows**: Coming soon - build from source for now
+- **🍎 macOS**: Coming soon - build from source for now
 
 **Installation:**
 1. Download the appropriate file for your platform
@@ -44,16 +43,16 @@ A professional-grade text-to-speech audiobook generator using Google's Gemini 2.
 
 ### Option 2: Install from Source
 ```bash
-git clone https://github.com/wowitsjacks/audiobook-maker.git
-cd audiobook-maker/audiobook_maker
-pip install -r requirements.txt
-python audiobook_gui_launcher.py
+git clone https://github.com/wowitsjack/AI-Audiobook-Maker.git
+cd AI-Audiobook-Maker/audiobook_maker
+pip install -r src/requirements.txt
+python src/audiobook_gui_launcher.py
 ```
 
 ### Option 3: Build Your Own Binary
 ```bash
 cd audiobook_maker
-python utils/build_release.py --all
+python src/utils/build_release.py
 ```
 
 ## Setup
@@ -129,14 +128,16 @@ python utils/build_release.py --all
 ### Project Structure
 ```
 audiobook_maker/
-├── core/           # Core audiobook generation logic
-├── gui/            # User interface components
-├── tts/            # Text-to-speech integration
-├── music/          # Background music generation
-├── quality/        # Audio quality detection
-├── state/          # State management and resume
-├── utils/          # Utilities and build scripts
-└── requirements.txt
+├── src/
+│   ├── core/           # Core audiobook generation logic
+│   ├── gui/            # User interface components
+│   ├── tts/            # Text-to-speech integration
+│   ├── music/          # Background music generation
+│   ├── quality/        # Audio quality detection
+│   ├── state/          # State management and resume
+│   ├── utils/          # Utilities and build scripts
+│   └── requirements.txt
+└── releases/           # Built binaries
 ```
 
 ### Building Releases
@@ -144,13 +145,10 @@ The project includes a comprehensive build system:
 
 ```bash
 # Build for current platform
-python utils/build_release.py
+python src/utils/build_release.py
 
-# Build for all platforms (if supported)
-python utils/build_release.py --all
-
-# Install to ~/.local/bin (Linux)
-python utils/build_release.py --install-local
+# Build and install locally (Linux)
+python src/utils/build_release.py && cp dist/ai-audiobook-generator ~/.local/bin/
 ```
 
 ### Contributing
@@ -181,24 +179,26 @@ python utils/build_release.py --install-local
 - **Solution**: Close other applications, use smaller chunk sizes
 
 ### Getting Help
-- **Issues**: Report bugs on [GitHub Issues](https://github.com/wowitsjacks/audiobook-maker/issues)
-- **Discussions**: Join conversations in [GitHub Discussions](https://github.com/wowitsjacks/audiobook-maker/discussions)
+- **Issues**: Report bugs on [GitHub Issues](https://github.com/wowitsjack/AI-Audiobook-Maker/issues)
+- **Discussions**: Join conversations in [GitHub Discussions](https://github.com/wowitsjack/AI-Audiobook-Maker/discussions)
 
 ## Changelog
 
-### v2.1.0 (Latest)
+### v2.2.0 (Latest)
+- **PyDub Removal**: Complete migration to numpy/soundfile for better performance and reliability
+- **Per-Chunk Music**: Individual background music generation per TTS chunk for enhanced audio quality
+- **GUI Improvements**: Fixed critical music integration bug, improved layout, and enhanced per-chunk music controls
+- **Enhanced Build System**: Proper PyInstaller builds with comprehensive hidden imports
+- **Code Quality**: Professional codebase cleanup and comprehensive testing
+- **Brand Update**: Rebranded to "wowitsjack's AI Audiobook Maker"
+
+### v2.1.0 (Previous)
 - **Major Reorganization**: Complete codebase restructure into professional package
 - **New Build System**: Automated multi-platform build and release system
 - **Enhanced GUI**: Self-contained application with all dependencies embedded
 - **Improved Quality Detection**: Enhanced audio corruption detection algorithms
 - **Better Error Handling**: More robust error handling and retry logic
 - **Cross-Platform Binaries**: Pre-built executables for Windows, macOS, and Linux
-
-### v2.0.3 (Previous)
-- Added background music generation
-- Improved audio quality detection
-- Enhanced resume functionality
-- GUI improvements and bug fixes
 
 ## License
 
@@ -212,3 +212,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Open Source Community**: For the many libraries that make this project possible
 
 ---
+
+**Built with ❤️ by the open source community**
+
+[![GitHub stars](https://img.shields.io/github/stars/wowitsjack/AI-Audiobook-Maker?style=social)](https://github.com/wowitsjack/AI-Audiobook-Maker/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/wowitsjack/AI-Audiobook-Maker)](https://github.com/wowitsjack/AI-Audiobook-Maker/issues)
+[![GitHub license](https://img.shields.io/github/license/wowitsjack/AI-Audiobook-Maker)](https://github.com/wowitsjack/AI-Audiobook-Maker/blob/main/LICENSE)

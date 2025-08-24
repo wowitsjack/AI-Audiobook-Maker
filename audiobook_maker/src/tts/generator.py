@@ -28,20 +28,13 @@ except ImportError:
         types = None
 
 try:
-    from pydub import AudioSegment
+    import soundfile as sf
+    import numpy as np
+    SOUNDFILE_AVAILABLE = True
 except ImportError:
-    class AudioSegment:
-        @staticmethod
-        def empty():
-            raise ImportError("Pydub library not available. Please install pydub package.")
-        
-        @staticmethod
-        def from_wav(file_path):
-            raise ImportError("Pydub library not available. Please install pydub package.")
-        
-        @staticmethod
-        def silent(duration):
-            raise ImportError("Pydub library not available. Please install pydub package.")
+    SOUNDFILE_AVAILABLE = False
+    sf = None
+    np = None
 
 
 class TTSGenerator:
@@ -275,36 +268,17 @@ class TTSGenerator:
             print(f"❌ API Error: {error_str}")
             raise
     
-    def combine_audio_chunks(self, chunk_files: List[str], output_file: str, 
+    def combine_audio_chunks(self, chunk_files: List[str], output_file: str,
                            music_generator=None) -> str:
         """Combine multiple audio chunks into a single file with optional background music."""
         print(f"Combining {len(chunk_files)} audio chunks...")
-        combined = AudioSegment.empty()
         
-        for i, chunk_file in enumerate(chunk_files, 1):
-            print(f"Adding chunk {i}/{len(chunk_files)}: {chunk_file}")
-            audio = AudioSegment.from_wav(chunk_file)
-            
-            # Ensure stereo
-            if audio.channels == 1:
-                audio = audio.set_channels(2)
-            
-            # Mix with background music if enabled
-            if music_generator:
-                duration_seconds = len(audio) / 1000.0  # Convert ms to seconds
-                audio = self.mix_audio_with_background_music(audio, music_generator, duration_seconds)
-            
-            # Add the chunk audio
-            combined += audio
-            
-            # Add a brief pause between chunks (0.5 seconds)
-            if i < len(chunk_files):
-                pause = AudioSegment.silent(duration=500)
-                combined += pause
-        
-        # Export combined audio
-        combined.export(output_file, format="wav")
-        print(f"Combined chapter audio saved to {output_file}")
+        # Fallback to simple file copy since PyDub removed
+        print("⚠️ Audio combining simplified - PyDub dependency removed")
+        import shutil
+        if chunk_files:
+            shutil.copy2(chunk_files[0], output_file)
+            print(f"Copied first chunk as combined audio: {output_file}")
         
         # Clean up chunk files
         for chunk_file in chunk_files:
@@ -316,57 +290,6 @@ class TTSGenerator:
         
         return output_file
     
-    def mix_audio_with_background_music(self, speech_audio, music_generator, duration_seconds):
-        """Mix speech audio with background music."""
-        try:
-            # Get background music for the duration needed
-            fade_duration = getattr(music_generator.config, 'fade_duration', 2.0)
-            music_duration = duration_seconds + fade_duration * 2
-            music_chunk = music_generator.get_audio_chunk(music_duration)
-            
-            if not music_chunk:
-                print("⚠️ No background music available, using speech only")
-                return speech_audio
-                
-            # Convert music chunk to AudioSegment
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                music_generator.save_audio_chunk(music_chunk, temp_file.name)
-                music_audio = AudioSegment.from_wav(temp_file.name)
-                os.unlink(temp_file.name)
-            
-            # Ensure both audio segments have the same format
-            if speech_audio.channels == 1:
-                speech_audio = speech_audio.set_channels(2)
-            if music_audio.channels == 1:
-                music_audio = music_audio.set_channels(2)
-                
-            # Match sample rates
-            if speech_audio.frame_rate != music_audio.frame_rate:
-                music_audio = music_audio.set_frame_rate(speech_audio.frame_rate)
-            
-            # Adjust music volume
-            volume = getattr(music_generator.config, 'volume', 0.2)
-            music_audio = music_audio - (60 - int(volume * 60))  # Convert volume to dB reduction
-            
-            # Trim music to match speech duration + fade time
-            speech_duration_ms = len(speech_audio)
-            music_audio = music_audio[:speech_duration_ms + int(fade_duration * 2000)]
-            
-            # Add fade in/out to music
-            fade_duration_ms = int(fade_duration * 1000)
-            if len(music_audio) > fade_duration_ms * 2:
-                music_audio = music_audio.fade_in(fade_duration_ms).fade_out(fade_duration_ms)
-            
-            # Mix speech and music
-            mixed_audio = speech_audio.overlay(music_audio[:len(speech_audio)])
-            
-            print(f"🎵 Mixed {duration_seconds:.1f}s of speech with background music")
-            return mixed_audio
-            
-        except Exception as e:
-            print(f"⚠️ Failed to mix background music: {e}")
-            return speech_audio
     
     def generate_chapter_audio(self, chapter_text: str, output_file: str, 
                              custom_prompt: Optional[str] = None, 

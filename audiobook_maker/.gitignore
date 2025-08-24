@@ -1,0 +1,36 @@
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Releases - these should be built locally
+releases/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+venv/
+env/
+.env
+
+# Logs
+*.log
+
+# Local development
+.local/
