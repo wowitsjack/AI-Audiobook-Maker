@@ -71,7 +71,7 @@ class AudiobookBuilder:
         
         print(f"Building binary for {target_platform}...")
         
-        # PyInstaller command
+        # PyInstaller command with proper module detection
         cmd = [
             "pyinstaller",
             "--onefile",
@@ -79,6 +79,43 @@ class AudiobookBuilder:
             "--distpath", str(self.dist_dir),
             "--clean",
             "--noconfirm",
+            # Add paths
+            "--paths", str(self.src_dir),
+            # Hidden imports for all our modules
+            "--hidden-import", "gui",
+            "--hidden-import", "gui.application",
+            "--hidden-import", "gui.launch_gui",
+            "--hidden-import", "core",
+            "--hidden-import", "core.app_functions",
+            "--hidden-import", "core.cli",
+            "--hidden-import", "core.config",
+            "--hidden-import", "core.engine",
+            "--hidden-import", "music",
+            "--hidden-import", "music.generator",
+            "--hidden-import", "quality",
+            "--hidden-import", "quality.detector",
+            "--hidden-import", "state",
+            "--hidden-import", "state.manager",
+            "--hidden-import", "state.project_manager",
+            "--hidden-import", "tts",
+            "--hidden-import", "tts.generator",
+            "--hidden-import", "utils",
+            "--hidden-import", "utils.api_retry_handler",
+            "--hidden-import", "utils.rate_limiter",
+            "--hidden-import", "utils.text_processing",
+            # Common dependencies
+            "--hidden-import", "customtkinter",
+            "--hidden-import", "tkinter",
+            "--hidden-import", "tkinter.ttk",
+            "--hidden-import", "tkinter.filedialog",
+            "--hidden-import", "tkinter.messagebox",
+            "--hidden-import", "PIL",
+            "--hidden-import", "PIL.Image",
+            "--hidden-import", "PIL.ImageTk",
+            "--hidden-import", "google.genai",
+            "--hidden-import", "google.generativeai",
+            "--hidden-import", "numpy",
+            "--hidden-import", "soundfile",
             str(self.src_dir / "audiobook_gui_launcher.py")
         ]
         

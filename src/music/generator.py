@@ -7,6 +7,7 @@ Generates real-time instrumental music for audiobook backgrounds
 import asyncio
 import os
 import logging
+import io
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -30,11 +31,8 @@ try:
 except ImportError:
     NUMPY_AVAILABLE = False
 
-try:
-    from pydub import AudioSegment
-    PYDUB_AVAILABLE = True
-except ImportError:
-    PYDUB_AVAILABLE = False
+# PyDub removed - using numpy/soundfile only
+PYDUB_AVAILABLE = False
 
 
 class MusicMood(Enum):
@@ -91,16 +89,16 @@ class MusicGenerator:
         """Initialize music generator
         
         Args:
-            api_key: Google AI API key. If None, will use GEMINI_API_KEY env var
+            api_key: Google AI API key. If None, will use GOOGLE_API_KEY env var
         """
         self.logger = logging.getLogger(__name__)
         
         if not LYRIA_AVAILABLE:
             raise ImportError("google-genai package required for music generation. Install with: pip install google-genai")
             
-        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
+        self.api_key = api_key or os.getenv('GOOGLE_API_KEY')
         if not self.api_key:
-            raise ValueError("API key required for music generation. Set GEMINI_API_KEY environment variable.")
+            raise ValueError("API key required for music generation. Set GOOGLE_API_KEY environment variable.")
             
         # Initialize client with v1alpha API version for Lyria access
         self.client = genai.Client(
@@ -109,6 +107,7 @@ class MusicGenerator:
         )
         
         self.session = None
+        self.session_context = None
         self.is_generating = False
         self.audio_queue = queue.Queue()
         self.config = MusicConfig()
@@ -180,13 +179,13 @@ class MusicGenerator:
             self.config = config
             
         try:
-            # Connect to Lyria RealTime
-            self.session = await self.client.aio.live.music.connect(
+            # Store the session context for proper cleanup
+            self.session_context = self.client.aio.live.music.connect(
                 model='models/lyria-realtime-exp'
             )
             
-            # Set up audio receiver task
-            self.receive_task = asyncio.create_task(self._receive_audio())
+            # Enter the context manager
+            self.session = await self.session_context.__aenter__()
             
             # Get prompts for mood and genre
             prompts = self.get_prompts_for_mood_and_genre(self.config.mood, self.config.genre)
@@ -218,6 +217,9 @@ class MusicGenerator:
                 
             await self.session.set_music_generation_config(config=music_config)
             
+            # Set up audio receiver task
+            self.receive_task = asyncio.create_task(self._receive_audio())
+            
             # Start music generation
             await self.session.play()
             self.is_generating = True
@@ -228,11 +230,12 @@ class MusicGenerator:
         except Exception as e:
             self.logger.error(f"Failed to start music generation: {e}")
             self.is_generating = False
-            if self.session:
+            if hasattr(self, 'session_context') and self.session_context:
                 try:
-                    await self.session.stop()
+                    await self.session_context.__aexit__(None, None, None)
                 except:
                     pass
+                self.session_context = None
                 self.session = None
             return False
             
@@ -253,6 +256,9 @@ class MusicGenerator:
                             with self.buffer_lock:
                                 self.audio_buffer.pop(0)
                                 
+        except asyncio.CancelledError:
+            # Normal cancellation when stopping
+            pass
         except Exception as e:
             self.logger.error(f"Error receiving audio from Lyria: {e}")
             self.is_generating = False
@@ -400,6 +406,19 @@ class MusicGenerator:
         except Exception as e:
             self.logger.error(f"Failed to save audio: {e}")
             
+    def convert_to_mp3(self, wav_data: bytes, mp3_filename: str) -> bool:
+        """MP3 conversion not available - PyDub dependency removed
+        
+        Args:
+            wav_data: Raw WAV audio data
+            mp3_filename: Output MP3 filename
+            
+        Returns:
+            False - MP3 conversion not supported
+        """
+        self.logger.warning("MP3 conversion not available - PyDub dependency removed")
+        return False
+            
     async def pause(self):
         """Pause music generation"""
         if self.session and self.is_generating:
@@ -432,8 +451,14 @@ class MusicGenerator:
                     except asyncio.CancelledError:
                         pass
                 
-                # Stop session
+                # Stop session and exit context manager
                 await self.session.stop()
+                
+                # Properly exit the context manager
+                if hasattr(self, 'session_context') and self.session_context:
+                    await self.session_context.__aexit__(None, None, None)
+                    self.session_context = None
+                    
                 self.session = None
                 
                 with self.buffer_lock:

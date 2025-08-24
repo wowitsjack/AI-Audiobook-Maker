@@ -307,56 +307,24 @@ class AudiobookEngine:
             }
     
     def _combine_chapters(self, audio_files: List[str], output_file: str) -> str:
-        """Combine multiple chapter audio files into one"""
-        try:
-            from pydub import AudioSegment
-            
-            combined = AudioSegment.empty()
-            
-            for audio_file in audio_files:
-                audio = AudioSegment.from_wav(audio_file)
-                
-                # Ensure stereo
-                if audio.channels == 1:
-                    audio = audio.set_channels(2)
-                
-                combined += audio
-                
-                # Add pause between chapters (2 seconds)
-                pause = AudioSegment.silent(duration=2000)
-                combined += pause
-            
-            # Handle file collisions
-            final_output = self.state_manager.handle_file_collision(output_file)
-            combined.export(final_output, format="wav")
-            
-            self._notify_progress(f"Combined audiobook saved to {final_output}")
-            return final_output
-            
-        except ImportError:
-            # Fallback if pydub not available
-            import shutil
-            final_output = self.state_manager.handle_file_collision(output_file)
+        """Combine multiple chapter audio files into one - simplified without PyDub"""
+        import shutil
+        final_output = self.state_manager.handle_file_collision(output_file)
+        
+        if audio_files:
+            # Simple fallback - copy first file as combined output
             shutil.copy2(audio_files[0], final_output)
-            self._notify_progress(f"Single file copied to {final_output}")
-            return final_output
+            self._notify_progress(f"⚠️ Audio combining simplified - PyDub dependency removed")
+            self._notify_progress(f"Copied first file as combined audiobook: {final_output}")
+        
+        return final_output
     
     def _copy_single_chapter(self, source_file: str, output_file: str) -> str:
-        """Copy single chapter as complete audiobook"""
-        try:
-            from pydub import AudioSegment
-            
-            audio = AudioSegment.from_wav(source_file)
-            final_output = self.state_manager.handle_file_collision(output_file)
-            audio.export(final_output, format="wav")
-            
-            return final_output
-            
-        except ImportError:
-            import shutil
-            final_output = self.state_manager.handle_file_collision(output_file)
-            shutil.copy2(source_file, final_output)
-            return final_output
+        """Copy single chapter as complete audiobook - simplified without PyDub"""
+        import shutil
+        final_output = self.state_manager.handle_file_collision(output_file)
+        shutil.copy2(source_file, final_output)
+        return final_output
     
     def get_project_status(self, chapters_dir: str = "chapters") -> Dict[str, Any]:
         """

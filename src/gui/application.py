@@ -43,19 +43,50 @@ except ImportError:
         genai = None
         types = None
 
+# PyDub dependency removed - using numpy/soundfile only
+
+# Define fallback function first
+def generate_chapter_audio_fallback(chapter_text, output_file, model="gemini-2.5-flash-preview-tts", custom_prompt=None, safe_chunk_mode=False):
+    """Generate TTS audio for a chapter (fallback implementation without music)."""
+    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+    NARRATOR_VOICE = os.getenv('NARRATOR_VOICE', 'Charon')
+    
+    if not GOOGLE_API_KEY:
+        raise EnvironmentError("GOOGLE_API_KEY not found in environment variables")
+    
+    if custom_prompt and custom_prompt.strip():
+        tts_prompt = f"For your tone and delivery, {custom_prompt.strip()}. Do not read these instructions aloud, read the following in this voice: {chapter_text}"
+    else:
+        tts_prompt = f"For your tone and delivery, use a professional, engaging audiobook narration style. Do not read these instructions aloud, read the following in this voice: {chapter_text}"
+    
+    if not genai:
+        raise ImportError("Google Genai library not available")
+    client = genai.Client(api_key=GOOGLE_API_KEY)
+    
+    audio_data = generate_audio_with_quota_awareness(
+        client,
+        tts_prompt,
+        NARRATOR_VOICE,
+        model=model,
+        max_retries=3
+    )
+    
+    wave_file(output_file, audio_data)
+    return output_file
+
+# Import core functions with proper fallbacks
 try:
-    from pydub import AudioSegment  # type: ignore
+    # This will work when the package is installed or running from the project root.
+    from src.core.app_functions import combine_chapters, generate_chapter_audio
 except ImportError:
-    class AudioSegment:  # type: ignore
-        @staticmethod
-        def empty():
-            raise ImportError("Pydub library not available")
-        @staticmethod
-        def from_wav(file_path):
-            raise ImportError("Pydub library not available")
-        @staticmethod
-        def silent(duration):
-            raise ImportError("Pydub library not available")
+    try:
+        # This will work when running from the 'src' directory.
+        from core.app_functions import combine_chapters, generate_chapter_audio
+    except ImportError:
+        # If all else fails, use fallback functions.
+        print("Warning: Could not import core application functions, using fallbacks.")
+        combine_chapters = None
+        generate_chapter_audio = generate_chapter_audio_fallback
 
 # Load configuration function
 def load_config():
@@ -138,8 +169,14 @@ def generate_audio_with_quota_awareness(client, text, voice, model="gemini-2.5-f
                 model=model,
                 contents=text,
                 config=types.GenerateContentConfig(
-                    system_instruction="You are a professional audiobook narrator.",
-                    speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(name=voice))
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                voice_name=voice,
+                            )
+                        )
+                    )
                 )
             )
             
@@ -157,53 +194,7 @@ def generate_audio_with_quota_awareness(client, text, voice, model="gemini-2.5-f
             import time
             time.sleep(2 ** attempt)  # Exponential backoff
 
-# Audio generation functions
-def generate_chapter_audio(chapter_text, output_file, model="gemini-2.5-flash-preview-tts", custom_prompt=None, safe_chunk_mode=False):
-    """Generate TTS audio for a chapter."""
-    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-    NARRATOR_VOICE = os.getenv('NARRATOR_VOICE', 'Charon')
-    
-    if not GOOGLE_API_KEY:
-        raise EnvironmentError("GOOGLE_API_KEY not found in environment variables")
-    
-    if custom_prompt and custom_prompt.strip():
-        tts_prompt = f"{custom_prompt.strip()}: {chapter_text}"
-    else:
-        tts_prompt = f"Narrate this audiobook chapter in a professional, engaging style: {chapter_text}"
-    
-    if not genai:
-        raise ImportError("Google Genai library not available")
-    client = genai.Client(api_key=GOOGLE_API_KEY)
-    
-    audio_data = generate_audio_with_quota_awareness(
-        client,
-        tts_prompt,
-        NARRATOR_VOICE,
-        model=model,
-        max_retries=3
-    )
-    
-    wave_file(output_file, audio_data)
-    return output_file
-
-def combine_chapters(audio_files, output_file):
-    """Combine multiple chapter audio files into a single audiobook."""
-    print("Combining chapters into complete audiobook...")
-    combined = AudioSegment.empty()
-    
-    for audio_file in audio_files:
-        print(f"Adding {audio_file}")
-        audio = AudioSegment.from_wav(audio_file)
-        
-        if audio.channels == 1:
-            audio = audio.set_channels(2)
-            
-        combined += audio
-        pause = AudioSegment.silent(duration=2000)
-        combined += pause
-    
-    combined.export(output_file, format="wav")
-    print(f"Complete audiobook saved to {output_file}")
+# Audio generation functions (now using imported core functions)
 
 # Project state manager
 class ProjectStateManager:
@@ -392,7 +383,8 @@ class AudiobookGeneratorGUI:
         
         # Background music options
         self.enable_background_music = tk.BooleanVar(value=os.getenv('ENABLE_BACKGROUND_MUSIC', 'false').lower() == 'true')
-        self.music_volume = tk.DoubleVar(value=float(os.getenv('BACKGROUND_MUSIC_VOLUME', '0.2')))
+        self.per_chunk_music = tk.BooleanVar(value=os.getenv('PER_CHUNK_MUSIC', 'false').lower() == 'true')
+        self.music_volume = tk.DoubleVar(value=float(os.getenv('BACKGROUND_MUSIC_VOLUME', '0.15')))
         self.music_mood = tk.StringVar(value=os.getenv('BACKGROUND_MUSIC_MOOD', 'ambient'))
         self.music_genre = tk.StringVar(value=os.getenv('BACKGROUND_MUSIC_GENRE', 'ambient'))
         self.music_bpm = tk.IntVar(value=int(os.getenv('BACKGROUND_MUSIC_BPM', '80')))
@@ -526,6 +518,8 @@ class AudiobookGeneratorGUI:
                 # Load background music preferences
                 if 'enable_background_music' in settings:
                     self.enable_background_music.set(settings['enable_background_music'])
+                if 'per_chunk_music' in settings:
+                    self.per_chunk_music.set(settings['per_chunk_music'])
                 if 'music_volume' in settings:
                     self.music_volume.set(settings['music_volume'])
                 if 'music_mood' in settings:
@@ -574,6 +568,7 @@ class AudiobookGeneratorGUI:
                 'safe_chunk_mode': self.safe_chunk_mode.get(),
                 'enable_corruption_detection': self.enable_corruption_detection.get(),
                 'enable_background_music': self.enable_background_music.get(),
+                'per_chunk_music': self.per_chunk_music.get(),
                 'music_volume': self.music_volume.get(),
                 'music_mood': self.music_mood.get(),
                 'music_genre': self.music_genre.get(),
@@ -1192,7 +1187,8 @@ Created with ❤️ for audiobook enthusiasts""")
             text="🎧 Generate Audiobook",
             command=self.start_generation,
             font=ctk.CTkFont(size=14, weight="bold"),
-            height=45
+            height=45,
+            width=200
         )
         self.generate_btn.grid(row=2, column=0, padx=(10, 5), pady=(10, 10), sticky="ew")
         
@@ -1247,6 +1243,16 @@ Created with ❤️ for audiobook enthusiasts""")
             command=self.on_music_toggle
         )
         self.music_checkbox.grid(row=0, column=0, sticky="w")
+        
+        # Per-chunk music checkbox
+        self.per_chunk_checkbox = ctk.CTkCheckBox(
+            music_enable_frame,
+            text="Per-Chunk Music",
+            variable=self.per_chunk_music,
+            font=ctk.CTkFont(size=11),
+            command=self.on_per_chunk_toggle
+        )
+        self.per_chunk_checkbox.grid(row=1, column=0, sticky="w", pady=(5, 0))
         
         # Music volume slider
         volume_frame = ctk.CTkFrame(music_enable_frame, fg_color="transparent")
@@ -1875,6 +1881,16 @@ Created with ❤️ for audiobook enthusiasts""")
         # Save settings immediately
         self.save_settings()
     
+    def on_per_chunk_toggle(self):
+        """Handle per-chunk music toggle changes"""
+        if self.per_chunk_music.get():
+            self.log_message("🎵 Per-chunk music enabled - mixing at chunk level, stitching pre-mixed clips")
+        else:
+            self.log_message("🎵 Per-chunk music disabled - single final mix after combining all chunks")
+        
+        # Save settings immediately
+        self.save_settings()
+    
     def on_music_volume_change(self, value):
         """Handle music volume slider changes"""
         volume = float(value)
@@ -1920,12 +1936,20 @@ Created with ❤️ for audiobook enthusiasts""")
         try:
             # Import music generator
             try:
-                from music.generator import MusicGenerator, MusicConfig, MusicMood, MusicGenre
+                from src.music.generator import MusicGenerator, MusicConfig, MusicMood, MusicGenre
             except ImportError:
-                from audiobook_maker.music.generator import MusicGenerator, MusicConfig, MusicMood, MusicGenre
+                try:
+                    from music.generator import MusicGenerator, MusicConfig, MusicMood, MusicGenre
+                except ImportError:
+                    # Fallback for music generator if path is weird
+                    print("Warning: Could not import music generator.")
+                    MusicGenerator = None
+                    MusicConfig = None
+                    MusicMood = None
+                    MusicGenre = None
             
             # Check if music generation is available
-            if not hasattr(MusicGenerator, '__name__'):
+            if not MusicGenerator or not MusicMood or not MusicGenre or not MusicConfig:
                 messagebox.showwarning("Music Preview", "Background music generation not available. Check dependencies.")
                 return
             
@@ -2297,9 +2321,9 @@ Created with ❤️ for audiobook enthusiasts""")
                         # Check if this chunk is already completed
                         output_file = os.path.join(self.output_path.get(), chunk_filename.replace('.txt', '.wav'))
                         if output_file in completed_chunks:
-                            display_name = f"✅ {display_name} (completed)"
+                            display_name = f"📁 {display_name} (existing file found)"
                             self.chapter_listbox.insert(tk.END, display_name)
-                            self.chapter_listbox.itemconfig(tk.END, {'fg': 'green', 'bg': '#2d3a2d'})
+                            self.chapter_listbox.itemconfig(tk.END, {'fg': 'lightblue', 'bg': '#2d3a4d'})
                             completed_count += 1
                         else:
                             self.chapter_listbox.insert(tk.END, display_name)
@@ -2555,8 +2579,8 @@ Created with ❤️ for audiobook enthusiasts""")
             if display_name in self.file_chunks:
                 chunk_info = self.file_chunks[display_name]
                 if chunk_info.get('completed', False):
-                    self.chapter_listbox.insert(tk.END, f"✅ {display_name}")
-                    self.chapter_listbox.itemconfig(tk.END, {'fg': 'green', 'bg': '#2d3a2d'})
+                    self.chapter_listbox.insert(tk.END, f"📁 {display_name} (existing file found)")
+                    self.chapter_listbox.itemconfig(tk.END, {'fg': 'lightblue', 'bg': '#2d3a4d'})
                 else:
                     self.chapter_listbox.insert(tk.END, display_name)
                     self.chapter_listbox.itemconfig(tk.END, {'fg': 'white', 'bg': '#2b2b2b'})
@@ -3106,6 +3130,7 @@ Created with ❤️ for audiobook enthusiasts""")
         
         # Update background music environment variables
         os.environ['ENABLE_BACKGROUND_MUSIC'] = str(self.enable_background_music.get()).lower()
+        os.environ['PER_CHUNK_MUSIC'] = str(self.per_chunk_music.get()).lower()
         os.environ['BACKGROUND_MUSIC_VOLUME'] = str(self.music_volume.get())
         os.environ['BACKGROUND_MUSIC_MOOD'] = self.music_mood.get()
         os.environ['BACKGROUND_MUSIC_GENRE'] = self.music_genre.get()
@@ -3215,7 +3240,7 @@ Created with ❤️ for audiobook enthusiasts""")
             os.makedirs(output_dir, exist_ok=True)
 
             # Only use the custom prompt from the GUI textbox with proper instruction format
-            combined_instructions = f"You are to speak in the following tone: {custom_prompt}. Do not speak these instructions aloud. I will begin the content now: "
+            formatted_prompt = custom_prompt.strip()
 
             generated_files = []
 
@@ -3239,7 +3264,7 @@ Created with ❤️ for audiobook enthusiasts""")
 
                 # Generate audio with custom prompt
                 actual_output_file = self.generate_chapter_with_custom_prompt(
-                    chunk_content, combined_instructions, output_file, combined_instructions
+                    chunk_content, formatted_prompt, output_file, formatted_prompt
                 )
                 generated_files.append(actual_output_file)
 
@@ -3262,7 +3287,7 @@ Created with ❤️ for audiobook enthusiasts""")
                             completed_item = f"✅ {item}"
                             self.chapter_listbox.delete(idx)
                             self.chapter_listbox.insert(idx, completed_item)
-                            self.chapter_listbox.itemconfig(idx, {'fg': 'green', 'bg': '#2d3a2d'})
+                            self.chapter_listbox.itemconfig(idx, {'fg': 'lightblue', 'bg': '#2d3a4d'})
                         break
     
                 self.log_message(f"✅ Completed {display_name}")
@@ -3270,12 +3295,21 @@ Created with ❤️ for audiobook enthusiasts""")
             # Combine chapters and convert to final format
             if len(generated_files) > 1:
                 self.log_message("🎼 Combining chunks into complete audiobook...")
-                combine_chapters(generated_files, "complete_audiobook.wav")
+                if combine_chapters:
+                    combine_chapters(generated_files, "complete_audiobook.wav", enable_background_music=self.enable_background_music.get())
+                else:
+                    self.log_message("❌ Audio combining function not available")
+                    raise ImportError("Core audio processing functions not available")
             else:
-                self.log_message("📖 Single chunk, creating audiobook...")
-                # Copy single file as complete audiobook
-                import shutil
-                shutil.copy2(generated_files[0], "complete_audiobook.wav")
+                self.log_message("📖 Single chunk audiobook - applying background music if enabled...")
+                # For single chunk, use combine_chapters with single file to apply background music
+                if combine_chapters:
+                    combine_chapters(generated_files, "complete_audiobook.wav", enable_background_music=self.enable_background_music.get())
+                else:
+                    # Fallback: just copy the file
+                    import shutil
+                    shutil.copy2(generated_files[0], "complete_audiobook.wav")
+                    self.log_message("⚠️ Background music not applied - core functions unavailable")
 
             # Save file information for change detection
             if self.project_id:
@@ -3321,15 +3355,17 @@ Created with ❤️ for audiobook enthusiasts""")
             self.progress_indicator.configure(text="📊 Ready to generate")
             
     def generate_chapter_with_custom_prompt(self, chapter_text, system_instructions, output_file, custom_prompt):
-        """Generate audio with custom prompt using the app.py generation functions with safe chunk mode"""
-        try:
-            from core.app_functions import generate_chapter_audio
-        except ImportError:
-            from audiobook_maker.core.app_functions import generate_chapter_audio
+        """Generate audio with custom prompt using the robust core generation functions"""
+        # Use the imported generate_chapter_audio function or fallback to local
+        if generate_chapter_audio:
+            generation_function = generate_chapter_audio
+        else:
+            # Use the local fallback function
+            generation_function = globals()['generate_chapter_audio']
         
-        # Use the app.py generation function with safe chunk mode
+        # Use the core generation function with safe chunk mode
         try:
-            actual_output_file = generate_chapter_audio(
+            actual_output_file = generation_function(
                 chapter_text=chapter_text,
                 output_file=output_file,
                 model=self.tts_model.get(),
