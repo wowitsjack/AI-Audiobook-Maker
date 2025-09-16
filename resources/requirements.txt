@@ -1,0 +1,16 @@
+google-genai
+python-dotenv==1.0.0
+pydub==0.25.1
+customtkinter==5.2.2
+pyinstaller==6.15.0
+pillow==11.3.0
+requests>=2.25.0
+tiktoken
+# Audio corruption detection libraries
+librosa>=0.10.0
+scipy>=1.10.0
+numpy>=1.24.0
+soundfile>=0.12.0
+matplotlib>=3.7.0
+# Background music generation (already included: google-genai, numpy, pydub)
+# wave is part of Python standard library

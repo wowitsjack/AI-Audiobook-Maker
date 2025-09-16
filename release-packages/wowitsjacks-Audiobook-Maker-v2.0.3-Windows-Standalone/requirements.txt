@@ -1,8 +1,0 @@
-google-genai
-python-dotenv==1.0.0
-pydub==0.25.1
-customtkinter==5.2.2
-pyinstaller==6.15.0
-pillow==11.3.0
-requests>=2.25.0
-tiktoken
