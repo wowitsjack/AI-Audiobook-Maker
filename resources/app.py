@@ -321,6 +321,9 @@ def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-
     """Generate TTS audio for a single text chunk using REST API with proper TTS prompting."""
     global CURRENT_CHUNK_LIMIT
     
+    # Get current narrator voice from environment (allowing dynamic updates from GUI)
+    current_narrator_voice = os.getenv('NARRATOR_VOICE', 'Charon')
+    
     # Enhanced debugging output
     print(f"🔍 DEBUG: Starting chunk audio generation")
     print(f"🔍 DEBUG: Model: {model}")
@@ -330,7 +333,7 @@ def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-
     print(f"🔍 DEBUG: Chunk length: {len(chunk_text)} characters")
     print(f"🔍 DEBUG: Chunk tokens: {count_tokens(chunk_text):,}")
     print(f"🔍 DEBUG: API Key present: {'***' + GOOGLE_API_KEY[-4:] if GOOGLE_API_KEY and len(GOOGLE_API_KEY) > 4 else 'Yes' if GOOGLE_API_KEY else 'No'}")
-    print(f"🔍 DEBUG: Narrator voice: {NARRATOR_VOICE}")
+    print(f"🔍 DEBUG: Narrator voice: {current_narrator_voice}")
     
     # Determine effective chunk limit based on safe mode
     effective_limit = CURRENT_CHUNK_LIMIT
@@ -393,13 +396,13 @@ def generate_chunk_audio(chunk_text, chunk_output_file, model="gemini-2.5-flash-
         print(f"🔍 DEBUG: Client initialized successfully")
         
         print(f"🔍 DEBUG: Calling generate_audio_with_quota_awareness...")
-        print(f"🔍 DEBUG: Voice: {NARRATOR_VOICE}, Model: {model}")
+        print(f"🔍 DEBUG: Voice: {current_narrator_voice}, Model: {model}")
         
         # Generate audio using REST API with proper TTS prompting
         audio_data = generate_audio_with_quota_awareness(
             client,
             tts_prompt,  # Properly formatted TTS prompt
-            NARRATOR_VOICE,
+            current_narrator_voice,
             model=model,
             max_retries=3,
             progress_callback=progress_callback
@@ -756,7 +759,7 @@ def main():
             return
 
         print(f"Found {len(chapter_files)} chapters to process")
-        print(f"Using narrator voice: {NARRATOR_VOICE}")
+        print(f"Using narrator voice: {os.getenv('NARRATOR_VOICE', 'Charon')}")
         print(f"Working directory: {working_dir}")
 
         # Initialize background music generator if enabled
